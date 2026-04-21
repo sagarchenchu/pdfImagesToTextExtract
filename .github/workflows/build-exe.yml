@@ -91,16 +91,34 @@ jobs:
       # so extracting them to the same parent folder produces one complete
       # HandwritingExtractor\ directory.  7-Zip is pre-installed on
       # windows-latest and is used here only to build the archives on CI.
+      #
+      # PyInstaller 6.x places data files under _internal\ inside the output
+      # folder, so bundled models live at:
+      #   HandwritingExtractor\_internal\models\
+      - name: Verify models directory exists in dist
+        run: |
+          $modelsPath = "dist\HandwritingExtractor\_internal\models"
+          if (Test-Path $modelsPath) {
+            Write-Host "✅ Models directory found at $modelsPath"
+            Get-ChildItem $modelsPath | Select-Object Name, LastWriteTime
+          } else {
+            Write-Error "❌ Models directory not found at $modelsPath – check PyInstaller output layout"
+            Get-ChildItem "dist\HandwritingExtractor" -Depth 2 | Select-Object FullName
+            exit 1
+          }
+
       - name: Zip distribution folder (two independent standard zip files)
         run: |
           Set-Location dist
 
-          # models archive – HandwritingExtractor\models\...
+          # models archive – HandwritingExtractor\_internal\models\...
+          # (PyInstaller 6.x places datas inside _internal\)
           & "C:\Program Files\7-Zip\7z.exe" a -tzip `
             "HandwritingExtractor-Windows-x64-models.zip" `
-            "HandwritingExtractor\models"
+            "HandwritingExtractor\_internal\models"
 
           # app archive – HandwritingExtractor\*.exe, *.dll, *.pyd, etc.
+          # -xr!models excludes the models sub-folder wherever it appears
           & "C:\Program Files\7-Zip\7z.exe" a -tzip `
             "HandwritingExtractor-Windows-x64-app.zip" `
             "HandwritingExtractor" "-xr!models"
