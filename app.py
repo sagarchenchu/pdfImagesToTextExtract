@@ -9,12 +9,13 @@ GUI built with tkinter (ships with Python – no extra install needed).
 Packaged to a Windows .exe with PyInstaller via the included spec file.
 """
 
+import errno as _errno
 import io
 import os
 import sys
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import numpy as np
 from PIL import Image
@@ -48,6 +49,49 @@ def _get_device():
     return _device
 
 
+_NETWORK_ERRNO: frozenset = frozenset({
+    _errno.ECONNREFUSED,   # Connection refused
+    _errno.ETIMEDOUT,      # Connection timed out
+    _errno.ENETUNREACH,    # Network unreachable
+    _errno.EHOSTUNREACH,   # No route to host
+    _errno.ECONNRESET,     # Connection reset by peer
+})
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """Return True if *exc* (or any chained cause) is a network/connection error."""
+    try:
+        import requests.exceptions as req_exc
+        import urllib3.exceptions as urllib3_exc
+        _network_types = (
+            req_exc.ConnectionError,
+            req_exc.Timeout,
+            req_exc.SSLError,
+            urllib3_exc.NewConnectionError,
+            urllib3_exc.MaxRetryError,
+        )
+    except ImportError:
+        _network_types = ()
+
+    checked: Set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in checked:
+        checked.add(id(current))
+        if isinstance(current, _network_types):
+            return True
+        # OSError covers socket-level errors; use errno codes for reliable detection
+        if isinstance(current, OSError) and (
+            getattr(current, "errno", None) in _NETWORK_ERRNO
+            or any(
+                kw in str(current).lower()
+                for kw in ("ssl", "certificate", "handshake")
+            )
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _load_easyocr(status_cb):
     global _easyocr_reader
     if _easyocr_reader is None:
@@ -56,11 +100,10 @@ def _load_easyocr(status_cb):
         try:
             _easyocr_reader = easyocr.Reader(["en"], gpu=(_get_device() == "cuda"))
         except Exception as exc:
-            err = str(exc)
-            if any(kw in err.lower() for kw in ("connection", "network", "timeout", "ssl", "socket", "unreachable", "resolve")):
+            if _is_connection_error(exc):
                 raise ConnectionError(
                     "Could not download EasyOCR models — check your internet connection and try again.\n\n"
-                    f"Details: {err}"
+                    f"Details: {exc}"
                 ) from exc
             raise
     return _easyocr_reader
@@ -71,24 +114,24 @@ def _load_trocr(status_cb):
     if _trocr_processor is None or _trocr_model is None:
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-        # Try loading from local cache first (works offline / avoids unnecessary network calls)
+        # Try loading from local cache first (works offline / avoids unnecessary network calls).
+        # HuggingFace raises OSError when the model is not cached and local_files_only=True.
         status_cb(f"Loading TrOCR model '{TROCR_MODEL}'…")
         try:
             _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL, local_files_only=True)
             _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL, local_files_only=True)
-        except Exception:
+        except OSError:
             # Model not cached yet — download it now
             status_cb(f"Downloading TrOCR model '{TROCR_MODEL}' (~1 GB, one-time download)…")
             try:
                 _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL)
                 _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
             except Exception as exc:
-                err = str(exc)
-                if any(kw in err.lower() for kw in ("connection", "network", "timeout", "ssl", "socket", "unreachable", "resolve")):
+                if _is_connection_error(exc):
                     raise ConnectionError(
                         "Could not download the TrOCR model — check your internet connection and try again.\n"
                         "The model (~1 GB) needs to be downloaded once before it can be used offline.\n\n"
-                        f"Details: {err}"
+                        f"Details: {exc}"
                     ) from exc
                 raise
 
