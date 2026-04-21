@@ -46,7 +46,7 @@ def download_trocr() -> None:
     TrOCRProcessor.from_pretrained(TROCR_MODEL)
     VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
 
-    print(f"[TrOCR] ✅  Model saved to {TROCR_CACHE_DIR}")
+    print(f"[TrOCR] [OK] Model saved to {TROCR_CACHE_DIR}")
 
 
 def download_easyocr() -> None:
@@ -67,7 +67,7 @@ def download_easyocr() -> None:
         download_enabled=True,
     )
 
-    print(f"[EasyOCR] ✅  Models saved to {EASYOCR_MODEL_DIR}")
+    print(f"[EasyOCR] [OK] Models saved to {EASYOCR_MODEL_DIR}")
 
 
 def main() -> None:
@@ -79,7 +79,7 @@ def main() -> None:
     download_easyocr()
 
     print("\n" + "=" * 60)
-    print(" ✅  All models downloaded successfully.")
+    print(" [OK] All models downloaded successfully.")
     print(f"     Models directory: {MODELS_DIR}")
     print("     You can now run:  pyinstaller handwriting_extractor.spec")
     print("=" * 60)
