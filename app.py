@@ -37,28 +37,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 
-# ---------------------------------------------------------------------------
-# When running as a PyInstaller EXE, redirect model caches to bundled paths
-# so the app works fully offline.  Must be called before any ML library import.
-# ---------------------------------------------------------------------------
-
-def _setup_bundled_model_paths() -> None:
-    """Redirect HuggingFace Hub cache to bundled models when running as frozen EXE."""
-    if not getattr(sys, "frozen", False):
-        return  # source / development mode – use normal cache dirs
-    bundle_dir = Path(sys._MEIPASS)  # type: ignore[attr-defined]
-    trocr_cache = bundle_dir / "models" / "trocr"
-    if trocr_cache.exists():
-        cache_str = str(trocr_cache)
-        # Set every env var that HuggingFace / Transformers may check
-        os.environ["HF_HUB_CACHE"] = cache_str
-        os.environ["HUGGINGFACE_HUB_CACHE"] = cache_str
-        os.environ["TRANSFORMERS_CACHE"] = cache_str
-
-
-# Call immediately – before any ML library is imported (those are lazy-loaded)
-_setup_bundled_model_paths()
-
 
 # ---------------------------------------------------------------------------
 # Lazy-load heavy ML libraries so the window opens immediately
@@ -165,10 +143,15 @@ def _load_trocr(status_cb):
         frozen = getattr(sys, "frozen", False)
 
         if frozen:
-            # Running as bundled EXE — models are embedded, no network access needed.
+            # Running as bundled EXE — models are stored in a flat directory
+            # (config.json, model weights, tokenizer files …) inside the bundle.
+            # Pass the local path directly to from_pretrained(); do NOT rely on
+            # HF_HUB_CACHE which expects the blob-cache layout, not a flat layout.
             status_cb(f"Loading TrOCR model '{TROCR_MODEL}' from bundle…")
-            _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL, local_files_only=True)
-            _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL, local_files_only=True)
+            bundle_dir = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+            trocr_local = str(bundle_dir / "models" / "trocr")
+            _trocr_processor = TrOCRProcessor.from_pretrained(trocr_local, local_files_only=True)
+            _trocr_model = VisionEncoderDecoderModel.from_pretrained(trocr_local, local_files_only=True)
         else:
             # Running from source — try local cache first, download if not cached.
             # HuggingFace raises OSError when the model is not cached and local_files_only=True.

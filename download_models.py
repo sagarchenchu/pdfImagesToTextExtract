@@ -10,14 +10,13 @@ Run this ONCE before building with PyInstaller:
     python download_models.py
 
 Models are written to:
-    models/trocr/    – HuggingFace Hub cache for microsoft/trocr-large-handwritten
+    models/trocr/    – microsoft/trocr-large-handwritten weights (flat layout)
     models/easyocr/  – EasyOCR CRAFT + English recognition weights
 
 These directories are excluded from git (see .gitignore) but included in the
 PyInstaller bundle via handwriting_extractor.spec.
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -41,19 +40,35 @@ TROCR_MODEL = "microsoft/trocr-large-handwritten"
 def download_trocr() -> None:
     TROCR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Tell HuggingFace Hub where to store the downloaded files.
-    # Must be set before importing transformers / huggingface_hub.
-    os.environ["HF_HUB_CACHE"] = str(TROCR_CACHE_DIR)
-    os.environ["HUGGINGFACE_HUB_CACHE"] = str(TROCR_CACHE_DIR)
-    os.environ["TRANSFORMERS_CACHE"] = str(TROCR_CACHE_DIR)
-
     print(f"\n[TrOCR] Downloading '{TROCR_MODEL}' to {TROCR_CACHE_DIR} …")
-    print("        This is ~1 GB and may take several minutes on first run.")
+    print("        This is ~1.35 GB and may take several minutes on first run.")
 
-    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+    # Use snapshot_download with local_dir so every model file is written
+    # directly into TROCR_CACHE_DIR (flat layout: config.json, model weights,
+    # tokenizer files …).  This avoids the HuggingFace Hub blob-cache format
+    # which on Windows – where symlinks require elevated privileges – stores
+    # the same data twice (once in blobs/, once in snapshots/), nearly doubling
+    # the on-disk footprint and pushing the resulting zip above GitHub's 2 GB
+    # release-asset limit.
+    import warnings
+    import shutil
+    from huggingface_hub import snapshot_download
 
-    TrOCRProcessor.from_pretrained(TROCR_MODEL)
-    VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")   # suppress local_dir_use_symlinks deprecation
+        snapshot_download(
+            repo_id=TROCR_MODEL,
+            local_dir=str(TROCR_CACHE_DIR),
+            local_dir_use_symlinks=False,  # store real copies, not symlinks
+        )
+
+    # Remove the download-tracking metadata directory that huggingface_hub
+    # creates inside local_dir (named ".cache" as of huggingface_hub 0.20+).
+    # It is not needed at runtime; silently skip if the name changes in a
+    # future release – it only contains small lock/progress files.
+    hf_tracking = TROCR_CACHE_DIR / ".cache"
+    if hf_tracking.exists():
+        shutil.rmtree(hf_tracking)
 
     print(f"[TrOCR] [OK] Model saved to {TROCR_CACHE_DIR}")
 
