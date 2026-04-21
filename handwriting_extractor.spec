@@ -166,7 +166,7 @@ a = Analysis(
         "pandas",
         "scipy.spatial.transform._rotation_groups",
     ],
-    noarchive=False,
+    noarchive=True,
     optimize=0,
 )
 
