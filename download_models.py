@@ -21,6 +21,15 @@ import os
 import sys
 from pathlib import Path
 
+# On Windows the default console encoding (cp1252 / charmap) cannot represent
+# Unicode characters such as the FULL BLOCK (U+2588) used by tqdm progress bars
+# during model downloads.  Reconfigure stdout/stderr to UTF-8 so those
+# characters are printed correctly instead of raising UnicodeEncodeError.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
 MODELS_DIR = SCRIPT_DIR / "models"
 TROCR_CACHE_DIR = MODELS_DIR / "trocr"

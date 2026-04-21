@@ -17,6 +17,16 @@ import threading
 from pathlib import Path
 from typing import List, Optional, Set
 
+# On Windows the default console encoding (cp1252 / charmap) cannot represent
+# Unicode characters such as the FULL BLOCK (U+2588) used by tqdm progress bars
+# when ML models are downloaded on first run.  Reconfigure stdout/stderr to
+# UTF-8 early so those characters are printed correctly instead of raising
+# UnicodeEncodeError.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import numpy as np
 from PIL import Image
 
