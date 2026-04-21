@@ -59,6 +59,16 @@ for pkg in [
     binaries += b
     hiddenimports += h
 
+# ── Ensure transformers/models/ directory exists on disk at runtime ────────
+# transformers uses __file__-relative os.path lookups (e.g.
+#   os.path.join(os.path.dirname(__file__), "models"))
+# at runtime.  PyInstaller normally compiles .py files into the .pyz archive
+# which makes the physical _internal/transformers/models/ directory absent,
+# causing WinError 3 (ERROR_PATH_NOT_FOUND).  Collecting the transformers
+# sources as data files (include_py_files=True) copies them next to the EXE
+# so the directory tree exists on disk.
+datas += collect_data_files("transformers", include_py_files=True)
+
 # ── Bundle pre-downloaded ML models ───────────────────────────────────────
 # Run  download_models.py  before this spec to populate these directories.
 _spec_root = Path(SPECPATH)  # noqa: F821 – PyInstaller built-in
@@ -98,9 +108,35 @@ hiddenimports += [
     "torch.nn.modules.normalization",
     "transformers.models.trocr",
     "transformers.models.trocr.modeling_trocr",
+    "transformers.models.trocr.configuration_trocr",
+    "transformers.models.trocr.processing_trocr",
     "transformers.models.vision_encoder_decoder",
     "transformers.models.vision_encoder_decoder.modeling_vision_encoder_decoder",
+    "transformers.models.vision_encoder_decoder.configuration_vision_encoder_decoder",
     "transformers.models.deit",
+    "transformers.models.deit.modeling_deit",
+    "transformers.models.deit.configuration_deit",
+    "transformers.models.vit",
+    "transformers.models.vit.modeling_vit",
+    "transformers.models.vit.configuration_vit",
+    "transformers.models.vit.feature_extraction_vit",
+    "transformers.models.roberta",
+    "transformers.models.roberta.modeling_roberta",
+    "transformers.models.roberta.configuration_roberta",
+    "transformers.models.roberta.tokenization_roberta",
+    "transformers.models.roberta.tokenization_roberta_fast",
+    "transformers.models.auto",
+    "transformers.models.auto.configuration_auto",
+    "transformers.models.auto.modeling_auto",
+    "transformers.models.auto.tokenization_auto",
+    "transformers.models.auto.processing_auto",
+    "transformers.modeling_utils",
+    "transformers.tokenization_utils",
+    "transformers.tokenization_utils_fast",
+    "transformers.processing_utils",
+    "transformers.feature_extraction_utils",
+    "transformers.image_processing_utils",
+    "transformers.image_transforms",
     "easyocr.detection",
     "easyocr.recognition",
     "easyocr.utils",
