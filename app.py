@@ -441,11 +441,12 @@ class HandwritingExtractorApp:
             self.root.after(0, lambda: self._btn_clear.config(state=tk.NORMAL))
 
         except Exception as exc:  # noqa: BLE001
-            self._set_status(f"❌  Error: {exc}")
+            err_msg = str(exc)
+            self._set_status(f"❌  Error: {err_msg}")
             self.root.after(
                 0,
-                lambda: messagebox.showerror(
-                    "Extraction Error", f"An error occurred:\n\n{exc}"
+                lambda msg=err_msg: messagebox.showerror(
+                    "Extraction Error", f"An error occurred:\n\n{msg}"
                 ),
             )
         finally:
