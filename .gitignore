@@ -1,0 +1,45 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# ── PyInstaller ───────────────────────────────────────────────────────────
+# Spec output dirs created during build – don't commit these
+dist/
+build/
+*.spec.bak
+
+# ── ML model caches ───────────────────────────────────────────────────────
+# Models are large and downloaded at runtime
+.cache/
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+
+# ── OS artefacts ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDEs ──────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Temp / test files ─────────────────────────────────────────────────────
+/tmp/
+*.log
