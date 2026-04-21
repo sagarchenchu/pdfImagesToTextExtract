@@ -9,12 +9,13 @@ GUI built with tkinter (ships with Python – no extra install needed).
 Packaged to a Windows .exe with PyInstaller via the included spec file.
 """
 
+import errno as _errno
 import io
 import os
 import sys
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import numpy as np
 from PIL import Image
@@ -24,6 +25,29 @@ from PIL import Image
 # ---------------------------------------------------------------------------
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+
+# ---------------------------------------------------------------------------
+# When running as a PyInstaller EXE, redirect model caches to bundled paths
+# so the app works fully offline.  Must be called before any ML library import.
+# ---------------------------------------------------------------------------
+
+def _setup_bundled_model_paths() -> None:
+    """Redirect HuggingFace Hub cache to bundled models when running as frozen EXE."""
+    if not getattr(sys, "frozen", False):
+        return  # source / development mode – use normal cache dirs
+    bundle_dir = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    trocr_cache = bundle_dir / "models" / "trocr"
+    if trocr_cache.exists():
+        cache_str = str(trocr_cache)
+        # Set every env var that HuggingFace / Transformers may check
+        os.environ["HF_HUB_CACHE"] = cache_str
+        os.environ["HUGGINGFACE_HUB_CACHE"] = cache_str
+        os.environ["TRANSFORMERS_CACHE"] = cache_str
+
+
+# Call immediately – before any ML library is imported (those are lazy-loaded)
+_setup_bundled_model_paths()
 
 
 # ---------------------------------------------------------------------------
@@ -48,22 +72,115 @@ def _get_device():
     return _device
 
 
+_NETWORK_ERRNO: frozenset = frozenset({
+    _errno.ECONNREFUSED,   # Connection refused
+    _errno.ETIMEDOUT,      # Connection timed out
+    _errno.ENETUNREACH,    # Network unreachable
+    _errno.EHOSTUNREACH,   # No route to host
+    _errno.ECONNRESET,     # Connection reset by peer
+})
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """Return True if *exc* (or any chained cause) is a network/connection error."""
+    try:
+        import requests.exceptions as req_exc
+        import urllib3.exceptions as urllib3_exc
+        _network_types = (
+            req_exc.ConnectionError,
+            req_exc.Timeout,
+            req_exc.SSLError,
+            urllib3_exc.NewConnectionError,
+            urllib3_exc.MaxRetryError,
+        )
+    except ImportError:
+        _network_types = ()
+
+    checked: Set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in checked:
+        checked.add(id(current))
+        if isinstance(current, _network_types):
+            return True
+        # OSError covers socket-level errors; use errno codes for reliable detection
+        if isinstance(current, OSError) and (
+            getattr(current, "errno", None) in _NETWORK_ERRNO
+            or any(
+                kw in str(current).lower()
+                for kw in ("ssl", "certificate", "handshake")
+            )
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _bundled_easyocr_model_dir() -> Optional[str]:
+    """Return the bundled EasyOCR model directory when running as a frozen EXE."""
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys._MEIPASS) / "models" / "easyocr"  # type: ignore[attr-defined]
+        if bundled.exists():
+            return str(bundled)
+    return None
+
+
 def _load_easyocr(status_cb):
     global _easyocr_reader
     if _easyocr_reader is None:
-        status_cb("Loading EasyOCR model (first run may take a moment)…")
+        status_cb("Loading EasyOCR model…")
         import easyocr
-        _easyocr_reader = easyocr.Reader(["en"], gpu=(_get_device() == "cuda"))
+        kwargs: dict = {"gpu": _get_device() == "cuda"}
+        model_dir = _bundled_easyocr_model_dir()
+        if model_dir:
+            # Bundled EXE: load from local models directory, no download
+            kwargs["model_storage_directory"] = model_dir
+            kwargs["download_enabled"] = False
+        try:
+            _easyocr_reader = easyocr.Reader(["en"], **kwargs)
+        except Exception as exc:
+            if _is_connection_error(exc):
+                raise ConnectionError(
+                    "Could not download EasyOCR models — check your internet connection and try again.\n\n"
+                    f"Details: {exc}"
+                ) from exc
+            raise
     return _easyocr_reader
 
 
 def _load_trocr(status_cb):
     global _trocr_processor, _trocr_model
     if _trocr_processor is None or _trocr_model is None:
-        status_cb(f"Loading TrOCR model '{TROCR_MODEL}' (may download ~1 GB on first run)…")
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-        _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL)
-        _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
+
+        frozen = getattr(sys, "frozen", False)
+
+        if frozen:
+            # Running as bundled EXE — models are embedded, no network access needed.
+            status_cb(f"Loading TrOCR model '{TROCR_MODEL}' from bundle…")
+            _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL, local_files_only=True)
+            _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL, local_files_only=True)
+        else:
+            # Running from source — try local cache first, download if not cached.
+            # HuggingFace raises OSError when the model is not cached and local_files_only=True.
+            status_cb(f"Loading TrOCR model '{TROCR_MODEL}'…")
+            try:
+                _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL, local_files_only=True)
+                _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL, local_files_only=True)
+            except OSError:
+                # Model not cached yet — download it now
+                status_cb(f"Downloading TrOCR model '{TROCR_MODEL}' (~1 GB, one-time download)…")
+                try:
+                    _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL)
+                    _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
+                except Exception as exc:
+                    if _is_connection_error(exc):
+                        raise ConnectionError(
+                            "Could not download the TrOCR model — check your internet connection and try again.\n"
+                            "The model (~1 GB) needs to be downloaded once before it can be used offline.\n\n"
+                            f"Details: {exc}"
+                        ) from exc
+                    raise
+
         _trocr_model.to(_get_device())
         _trocr_model.eval()
     return _trocr_processor, _trocr_model

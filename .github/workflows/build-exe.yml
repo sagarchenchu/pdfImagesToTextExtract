@@ -8,6 +8,7 @@ on:
       - "app.py"
       - "requirements.txt"
       - "handwriting_extractor.spec"
+      - "download_models.py"
       - ".github/workflows/build-exe.yml"
   pull_request:
     branches: ["main", "master"]
@@ -15,6 +16,7 @@ on:
       - "app.py"
       - "requirements.txt"
       - "handwriting_extractor.spec"
+      - "download_models.py"
   workflow_dispatch:          # allow manual trigger from GitHub UI
     inputs:
       create_release:
@@ -31,7 +33,7 @@ jobs:
   build:
     name: Build EXE on Windows
     runs-on: windows-latest
-    timeout-minutes: 90      # model downloads + PyInstaller can be slow
+    timeout-minutes: 150     # model downloads (~1.25 GB) + PyInstaller can be slow
 
     steps:
       # ── Checkout ──────────────────────────────────────────────────────
@@ -55,6 +57,11 @@ jobs:
 
       - name: Install PyInstaller
         run: pip install pyinstaller>=6.3.0
+
+      # ── Download ML models for offline bundling ───────────────────────
+      - name: Download ML models for bundling
+        run: python download_models.py
+        timeout-minutes: 40
 
       # ── Build ─────────────────────────────────────────────────────────
       - name: Build with PyInstaller
@@ -122,7 +129,9 @@ jobs:
             1. Download **HandwritingExtractor-Windows-x64.zip** below
             2. Extract the zip to any folder
             3. Run **HandwritingExtractor.exe**
-            4. On first launch the app downloads ML models (~1.5 GB total) — requires internet access
+
+            > **No internet connection required.**  ML models are bundled inside
+            > the distribution folder — the app works fully offline.
 
             ### What it does
             - Upload a **PDF** or **image** (PNG/JPG/TIFF/BMP/WebP)

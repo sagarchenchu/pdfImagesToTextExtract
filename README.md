@@ -24,8 +24,9 @@
    `HandwritingExtractor-Windows-x64.zip`
 2. Extract the zip to any folder
 3. Run **`HandwritingExtractor.exe`**
-4. On **first launch** the app downloads ML models (~1.5 GB) — a one-time
-   operation that requires internet access.  Subsequent launches are instant.
+
+> **No internet connection required.** ML models are bundled inside the
+> distribution folder — the app works fully offline.
 
 ---
 
@@ -48,6 +49,7 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 pip install pyinstaller
+python download_models.py          REM download TrOCR + EasyOCR models (~1.25 GB)
 pyinstaller handwriting_extractor.spec --noconfirm
 ```
 
@@ -67,10 +69,12 @@ python app.py
 
 ## ⚙️ Automatic CI/CD build
 
-Every push to `main` that changes `app.py`, `requirements.txt` or the spec
-file triggers the **Build Windows EXE** GitHub Actions workflow
+Every push to `main` that changes `app.py`, `requirements.txt`, `download_models.py`,
+or the spec file triggers the **Build Windows EXE** GitHub Actions workflow
 (`.github/workflows/build-exe.yml`).
 
+* Models are downloaded during the CI build and bundled into the EXE — **no
+  internet access is needed** on the end-user's machine.
 * The compiled zip is uploaded as a **workflow artifact** (retained 30 days).
 * Push a `v*.*.*` tag to automatically create a **GitHub Release** with the
   zip attached.
