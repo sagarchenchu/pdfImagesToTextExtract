@@ -91,27 +91,30 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # ── Optional: create a GitHub Release ────────────────────────────
+      # ── Create / update a GitHub Release ─────────────────────────────
       # Runs when:
-      #   • a version tag  (v*.*.*)  is pushed, OR
+      #   • a version tag  (v*.*.*)  is pushed  → versioned release
+      #   • push to main/master                 → rolling "latest" pre-release
       #   • the workflow is triggered manually with create_release=true
       - name: Get short commit SHA
         id: sha
         if: >
           startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
           (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
         run: echo "short=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
         if: >
           startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
           (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: >-
-            ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', steps.sha.outputs.short) }}
+            ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
           name: >-
-            ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || format('Dev build {0}', steps.sha.outputs.short) }}
+            ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || format('Latest build ({0})', steps.sha.outputs.short) }}
           body: |
             ## Handwriting Text Extractor – Windows Build
 
