@@ -80,12 +80,13 @@ jobs:
           }
 
       # ── Zip the output folder ─────────────────────────────────────────
+      # Compress-Archive is limited to 2 GB; use 7-Zip (pre-installed on
+      # windows-latest) which supports ZIP64 and handles multi-GB archives.
       - name: Zip distribution folder
         run: |
-          Compress-Archive `
-            -Path "dist\HandwritingExtractor\*" `
-            -DestinationPath "dist\HandwritingExtractor-Windows-x64.zip" `
-            -Force
+          & "C:\Program Files\7-Zip\7z.exe" a -tzip `
+            "dist\HandwritingExtractor-Windows-x64.zip" `
+            "dist\HandwritingExtractor\"
           Write-Host "Archive size:"
           Get-Item "dist\HandwritingExtractor-Windows-x64.zip" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
