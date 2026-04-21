@@ -21,8 +21,9 @@ build/
 *.spec.bak
 
 # ── ML model caches ───────────────────────────────────────────────────────
-# Models are large and downloaded at runtime
+# Models are large; download_models.py populates models/ at build time only
 .cache/
+models/
 *.pt
 *.pth
 *.onnx
