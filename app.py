@@ -53,17 +53,45 @@ def _load_easyocr(status_cb):
     if _easyocr_reader is None:
         status_cb("Loading EasyOCR model (first run may take a moment)…")
         import easyocr
-        _easyocr_reader = easyocr.Reader(["en"], gpu=(_get_device() == "cuda"))
+        try:
+            _easyocr_reader = easyocr.Reader(["en"], gpu=(_get_device() == "cuda"))
+        except Exception as exc:
+            err = str(exc)
+            if any(kw in err.lower() for kw in ("connection", "network", "timeout", "ssl", "socket", "unreachable", "resolve")):
+                raise ConnectionError(
+                    "Could not download EasyOCR models — check your internet connection and try again.\n\n"
+                    f"Details: {err}"
+                ) from exc
+            raise
     return _easyocr_reader
 
 
 def _load_trocr(status_cb):
     global _trocr_processor, _trocr_model
     if _trocr_processor is None or _trocr_model is None:
-        status_cb(f"Loading TrOCR model '{TROCR_MODEL}' (may download ~1 GB on first run)…")
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-        _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL)
-        _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
+
+        # Try loading from local cache first (works offline / avoids unnecessary network calls)
+        status_cb(f"Loading TrOCR model '{TROCR_MODEL}'…")
+        try:
+            _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL, local_files_only=True)
+            _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL, local_files_only=True)
+        except Exception:
+            # Model not cached yet — download it now
+            status_cb(f"Downloading TrOCR model '{TROCR_MODEL}' (~1 GB, one-time download)…")
+            try:
+                _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL)
+                _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
+            except Exception as exc:
+                err = str(exc)
+                if any(kw in err.lower() for kw in ("connection", "network", "timeout", "ssl", "socket", "unreachable", "resolve")):
+                    raise ConnectionError(
+                        "Could not download the TrOCR model — check your internet connection and try again.\n"
+                        "The model (~1 GB) needs to be downloaded once before it can be used offline.\n\n"
+                        f"Details: {err}"
+                    ) from exc
+                raise
+
         _trocr_model.to(_get_device())
         _trocr_model.eval()
     return _trocr_processor, _trocr_model
