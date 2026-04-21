@@ -11,9 +11,12 @@ Packaged to a Windows .exe with PyInstaller via the included spec file.
 
 import errno as _errno
 import io
+import logging
 import os
 import sys
+import tempfile
 import threading
+import traceback
 from pathlib import Path
 from typing import List, Optional, Set
 
@@ -26,6 +29,39 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# ---------------------------------------------------------------------------
+# File-based logging — captures everything even when console=False in the EXE
+# ---------------------------------------------------------------------------
+_LOG_PATH = Path(tempfile.gettempdir()) / "HandwritingExtractor.log"
+_ERROR_SEP = "═" * 60
+
+def _setup_logging() -> None:
+    """Configure the root logger to write full tracebacks to a log file."""
+    log_dir = _LOG_PATH.parent
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as _mkdir_err:
+        sys.stderr.write(f"WARNING: could not create log directory {log_dir}: {_mkdir_err}\n")
+
+    logging.basicConfig(
+        filename=str(_LOG_PATH),
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        encoding="utf-8",
+        errors="replace",
+        force=True,  # override any existing handler (e.g. from transformers)
+    )
+    logging.info("=" * 60)
+    logging.info("HandwritingExtractor started")
+    logging.info("Python %s", sys.version)
+    logging.info("frozen=%s", getattr(sys, "frozen", False))
+    if getattr(sys, "frozen", False):
+        logging.info("_MEIPASS=%s", getattr(sys, "_MEIPASS", "n/a"))
+    logging.info("Log file: %s", _LOG_PATH)
+    logging.info("=" * 60)
+
+_setup_logging()
 
 import numpy as np
 from PIL import Image
@@ -126,6 +162,7 @@ def _load_easyocr(status_cb):
         try:
             _easyocr_reader = easyocr.Reader(["en"], **kwargs)
         except Exception as exc:
+            logging.error("EasyOCR Reader init failed:\n%s", traceback.format_exc())
             if _is_connection_error(exc):
                 raise ConnectionError(
                     "Could not download EasyOCR models — check your internet connection and try again.\n\n"
@@ -150,6 +187,11 @@ def _load_trocr(status_cb):
             status_cb(f"Loading TrOCR model '{TROCR_MODEL}' from bundle…")
             bundle_dir = Path(sys._MEIPASS)  # type: ignore[attr-defined]
             trocr_local = str(bundle_dir / "models" / "trocr")
+            _trocr_dir_exists = Path(trocr_local).exists()
+            logging.info("Frozen EXE: loading TrOCR from %s", trocr_local)
+            logging.info("trocr dir exists: %s", _trocr_dir_exists)
+            if _trocr_dir_exists:
+                logging.info("trocr dir contents: %s", list(Path(trocr_local).iterdir()))
             _trocr_processor = TrOCRProcessor.from_pretrained(trocr_local, local_files_only=True)
             _trocr_model = VisionEncoderDecoderModel.from_pretrained(trocr_local, local_files_only=True)
         else:
@@ -347,6 +389,12 @@ class HandwritingExtractorApp:
         )
         self._btn_save.pack(side=tk.RIGHT, padx=14)
 
+        # View Log button (right-aligned, always enabled)
+        self._btn_log = self._make_button(
+            toolbar, "📋  View Log", self._on_view_log, "#455a64"
+        )
+        self._btn_log.pack(side=tk.RIGHT, padx=(0, 6))
+
         # File name label
         self._lbl_file = tk.Label(
             toolbar,
@@ -364,7 +412,7 @@ class HandwritingExtractorApp:
 
         self._lbl_status = tk.Label(
             prog_frame,
-            text="Ready – upload a PDF or image file to begin.",
+            text=f"Ready – upload a PDF or image file to begin.  (Log: {_LOG_PATH})",
             font=("Segoe UI", 9),
             fg="#37474f",
             bg="#f5f5f5",
@@ -465,6 +513,24 @@ class HandwritingExtractorApp:
                 fh.write(content)
             messagebox.showinfo("Saved", f"Results saved to:\n{path}")
 
+    def _on_view_log(self):
+        """Open the log file in Notepad (or the default text editor)."""
+        if not _LOG_PATH.exists():
+            messagebox.showinfo(
+                "No Log Yet",
+                f"No log file found yet.\nIt will be created at:\n{_LOG_PATH}",
+            )
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(_LOG_PATH))  # opens with default .log/.txt handler
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", str(_LOG_PATH)])
+        except Exception:
+            # Fallback: show path so user can open it manually
+            messagebox.showinfo("Log File", f"Log file location:\n{_LOG_PATH}")
+
     # ------------------------------------------------------------------
     # UI helpers (thread-safe via after())
     # ------------------------------------------------------------------
@@ -500,9 +566,12 @@ class HandwritingExtractorApp:
 
     def _run_extraction(self):
         try:
+            logging.info("Extraction started for: %s", self._selected_file)
             # Load models
             _load_easyocr(self._set_status)
+            logging.info("EasyOCR loaded OK")
             _load_trocr(self._set_status)
+            logging.info("TrOCR loaded OK")
 
             filepath = self._selected_file
             ext = Path(filepath).suffix.lower()
@@ -550,13 +619,31 @@ class HandwritingExtractorApp:
             self.root.after(0, lambda: self._btn_save.config(state=tk.NORMAL))
             self.root.after(0, lambda: self._btn_clear.config(state=tk.NORMAL))
 
-        except Exception as exc:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001 – catch *everything* so nothing is ever silent
+            # Re-raise signals and interpreter shutdown requests immediately
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            tb = traceback.format_exc()
             err_msg = str(exc)
-            self._set_status(f"❌  Error: {err_msg}")
+            logging.error("Extraction failed:\n%s", tb)
+
+            # Write the full traceback into the results area so it is always visible
+            self._append_text(
+                f"\n{_ERROR_SEP}\n"
+                f"❌  ERROR — extraction failed\n"
+                f"{_ERROR_SEP}\n"
+                f"{tb}\n"
+                f"Log file: {_LOG_PATH}\n"
+            )
+            self.root.after(0, lambda: self._btn_save.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self._btn_clear.config(state=tk.NORMAL))
+
+            self._set_status(f"❌  Error: {err_msg}  |  See log: {_LOG_PATH}")
             self.root.after(
                 0,
                 lambda msg=err_msg: messagebox.showerror(
-                    "Extraction Error", f"An error occurred:\n\n{msg}"
+                    "Extraction Error",
+                    f"An error occurred:\n\n{msg}\n\nFull details written to:\n{_LOG_PATH}",
                 ),
             )
         finally:
