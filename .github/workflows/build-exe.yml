@@ -79,23 +79,27 @@ jobs:
             exit 1
           }
 
-      # ── Zip the output folder ─────────────────────────────────────────
-      # Compress-Archive is limited to 2 GB; use 7-Zip (pre-installed on
-      # windows-latest) which supports ZIP64 and handles multi-GB archives.
-      - name: Zip distribution folder
+      # ── Zip the output folder (split into < 2 GB volumes) ────────────
+      # GitHub release assets must be < 2 GB each (2 147 483 648 bytes).
+      # The full bundle (PyTorch DLLs + ML models) exceeds that limit, so
+      # we use 7-Zip's -v flag to split into 1 900 MB volumes.
+      # 7-Zip is pre-installed on windows-latest.
+      # Output files: HandwritingExtractor-Windows-x64.zip.001, .002, …
+      - name: Zip distribution folder (split into 1900 MB volumes)
         run: |
-          & "C:\Program Files\7-Zip\7z.exe" a -tzip `
+          & "C:\Program Files\7-Zip\7z.exe" a -tzip -v1900m `
             "dist\HandwritingExtractor-Windows-x64.zip" `
             "dist\HandwritingExtractor\"
-          Write-Host "Archive size:"
-          Get-Item "dist\HandwritingExtractor-Windows-x64.zip" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+          Write-Host "Archive parts:"
+          Get-ChildItem "dist\HandwritingExtractor-Windows-x64.zip*" |
+            Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
       # ── Upload as workflow artifact ───────────────────────────────────
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
           name: HandwritingExtractor-Windows-x64
-          path: dist/HandwritingExtractor-Windows-x64.zip
+          path: dist/HandwritingExtractor-Windows-x64.zip*
           retention-days: 30
           if-no-files-found: error
 
@@ -127,12 +131,18 @@ jobs:
             ## Handwriting Text Extractor – Windows Build
 
             ### How to use
-            1. Download **HandwritingExtractor-Windows-x64.zip** below
-            2. Extract the zip to any folder
-            3. Run **HandwritingExtractor.exe**
+            1. Download **all** `HandwritingExtractor-Windows-x64.zip.*` parts below
+            2. Place all parts in the same folder
+            3. Open **HandwritingExtractor-Windows-x64.zip.001** with [7-Zip](https://www.7-zip.org/) and extract to any folder
+               *(7-Zip automatically reassembles multi-part archives)*
+            4. Run **HandwritingExtractor.exe**
 
             > **No internet connection required.**  ML models are bundled inside
             > the distribution folder — the app works fully offline.
+            >
+            > The distribution is split into multiple parts because the full bundle
+            > (PyTorch + ML models) exceeds GitHub's 2 GB per-asset limit.
+            > You need **all** parts to extract successfully.
 
             ### What it does
             - Upload a **PDF** or **image** (PNG/JPG/TIFF/BMP/WebP)
@@ -142,7 +152,7 @@ jobs:
             - Displays full results and lets you save them as a `.txt` file
 
             Built from commit: `${{ github.sha }}`
-          files: dist/HandwritingExtractor-Windows-x64.zip
+          files: dist/HandwritingExtractor-Windows-x64.zip.*
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true
