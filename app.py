@@ -236,7 +236,23 @@ def _load_easyocr(status_cb):
 def _load_trocr(status_cb):
     global _trocr_processor, _trocr_model
     if _trocr_processor is None or _trocr_model is None:
-        from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+        # Prefer the top-level lazy import; fall back to direct module paths so
+        # the frozen EXE works even when transformers' lazy-loader silently
+        # suppresses TrOCRProcessor because an optional backend is absent.
+        try:
+            from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+            # Verify the lazy import actually resolved the class (it can silently
+            # produce a dummy object when sentencepiece / tokenizers is missing).
+            _ = TrOCRProcessor.from_pretrained  # AttributeError → use fallback
+        except (ImportError, AttributeError) as _lazy_err:
+            logging.warning(
+                "transformers lazy import of TrOCRProcessor failed (%s) — "
+                "using direct module-path import.", _lazy_err
+            )
+            from transformers.models.trocr.processing_trocr import TrOCRProcessor  # type: ignore[no-redef]
+            from transformers.models.vision_encoder_decoder.modeling_vision_encoder_decoder import (  # type: ignore[no-redef]
+                VisionEncoderDecoderModel,
+            )
 
         frozen = getattr(sys, "frozen", False)
 
@@ -313,13 +329,29 @@ def _pdf_to_images(pdf_path: str) -> list:
 
 def _trocr_read(image_crop: Image.Image) -> str:
     """Run TrOCR inference on a single cropped line/region image."""
+    return _trocr_read_batch([image_crop])[0]
+
+
+# Number of crops processed in one model.generate() call.
+# Higher values = less per-call overhead → faster throughput on CPU.
+# Keep at ≤ 16 to avoid excessive peak memory usage.
+_TROCR_BATCH_SIZE = 8
+
+
+def _trocr_read_batch(image_crops: List[Image.Image]) -> List[str]:
+    """Run TrOCR inference on a batch of cropped images.
+
+    All crops are resized to the model's fixed input size (384 × 384) by the
+    ``TrOCRProcessor`` / ``ViTImageProcessor``, so no explicit padding is
+    needed.  Returns one decoded string per crop, in the same order.
+    """
     import torch
     processor, model = _trocr_processor, _trocr_model
     device = _get_device()
-    pixel_values = processor(image_crop, return_tensors="pt").pixel_values.to(device)
+    pixel_values = processor(image_crops, return_tensors="pt").pixel_values.to(device)
     with torch.no_grad():
         ids = model.generate(pixel_values)
-    return processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+    return [s.strip() for s in processor.batch_decode(ids, skip_special_tokens=True)]
 
 
 def _extract_from_image(
@@ -357,47 +389,74 @@ def _extract_from_image(
 
     append_cb(f"\n{'─' * 60}\n{label}  ({len(detections)} regions found)\n{'─' * 60}\n")
 
+    # ── Phase 1: build crops (fast – no model inference) ──────────────────
+    # Each entry is (easy_text, crop_image) for valid crops, or
+    # (easy_text, None) for degenerate bounding boxes that are skipped.
+    crop_items: list = []
+    for bbox, easy_text, _confidence in detections:
+        xs = [pt[0] for pt in bbox]
+        ys = [pt[1] for pt in bbox]
+        pad = 4
+        x1 = max(0, int(min(xs)) - pad)
+        y1 = max(0, int(min(ys)) - pad)
+        x2 = min(image.width, int(max(xs)) + pad)
+        y2 = min(image.height, int(max(ys)) + pad)
+
+        if (x2 - x1) < 5 or (y2 - y1) < 5:
+            crop_items.append((easy_text, None))
+        else:
+            crop_items.append((easy_text, image.crop((x1, y1, x2, y2))))
+
+    # ── Phase 2: batch TrOCR inference ────────────────────────────────────
+    # Process _TROCR_BATCH_SIZE crops per model.generate() call.  This
+    # reduces per-call overhead by up to _TROCR_BATCH_SIZE× compared with
+    # calling _trocr_read() once per region (the previous approach).
     results = []
-    n = len(detections)
+    n = len(crop_items)
 
-    for idx, (bbox, easy_text, _confidence) in enumerate(detections):
-        pct = progress_start + ((idx + 1) / n) * progress_share
+    for batch_start in range(0, n, _TROCR_BATCH_SIZE):
+        batch = crop_items[batch_start:batch_start + _TROCR_BATCH_SIZE]
+        batch_end = batch_start + len(batch)
+
+        pct = progress_start + (batch_end / n) * progress_share
         progress_cb(pct)
-        status_cb(f"[{label}] Reading region {idx + 1} / {n} with TrOCR…")
+        status_cb(
+            f"[{label}] Reading regions {batch_start + 1}–{batch_end} / {n} with TrOCR…"
+        )
 
-        try:
-            # Build crop coordinates from the polygon returned by EasyOCR
-            xs = [pt[0] for pt in bbox]
-            ys = [pt[1] for pt in bbox]
-            pad = 4
-            x1 = max(0, int(min(xs)) - pad)
-            y1 = max(0, int(min(ys)) - pad)
-            x2 = min(image.width, int(max(xs)) + pad)
-            y2 = min(image.height, int(max(ys)) + pad)
+        # Collect only the valid (non-None) crops from this batch so that we
+        # make a single batched inference call rather than one per crop.
+        valid_indices = [i for i, (_, crop) in enumerate(batch) if crop is not None]
+        valid_crops = [batch[i][1] for i in valid_indices]
 
-            if (x2 - x1) < 5 or (y2 - y1) < 5:
+        trocr_texts: List[str] = []
+        if valid_crops:
+            try:
+                trocr_texts = _trocr_read_batch(valid_crops)
+            except Exception:
+                logging.warning(
+                    "[%s] TrOCR batch %d–%d failed — falling back to EasyOCR.\n%s",
+                    label, batch_start + 1, batch_end, traceback.format_exc(),
+                )
+                trocr_texts = [""] * len(valid_crops)
+
+        trocr_iter = iter(trocr_texts)
+        for i, (easy_text, crop) in enumerate(batch):
+            abs_idx = batch_start + i + 1
+            if crop is None:
+                # Degenerate bbox — skip silently (same as before)
                 continue
 
-            crop = image.crop((x1, y1, x2, y2))
-            text = _trocr_read(crop)
-
+            text = next(trocr_iter, "").strip()
             if not text:
                 text = easy_text.strip()  # fallback to EasyOCR text
 
             if text:
                 results.append(text)
                 append_cb(text + "\n")
-
-        except Exception as exc:  # noqa: BLE001
-            logging.warning(
-                "[%s] TrOCR failed on region %d/%d — falling back to EasyOCR text.\n%s",
-                label, idx + 1, n, traceback.format_exc(),
-            )
-            fallback = easy_text.strip()
-            if fallback:
-                results.append(fallback)
-                append_cb(fallback + "\n")
-            status_cb(f"[{label}] Warning on region {idx + 1}: {exc}")
+            elif not text and easy_text.strip():
+                # Both TrOCR and EasyOCR returned nothing useful; log at debug
+                logging.debug("[%s] region %d: both TrOCR and EasyOCR returned empty", label, abs_idx)
 
     return results
 
