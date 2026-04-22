@@ -70,6 +70,17 @@ for pkg in [
     "charset_normalizer",
     "urllib3",
     "idna",
+    # scipy / sklearn — collect_all is required to pick up C extension .pyd
+    # binaries; listing them only in hiddenimports is not enough.
+    "scipy",
+    "sklearn",          # scikit-learn; imported as sklearn
+    # EasyOCR runtime dependencies that were completely absent from the spec
+    "yaml",             # PyYAML — easyocr config parsing
+    "shapely",          # polygon operations in easyocr text detection
+    "pyclipper",        # polygon clipping used by easyocr
+    "bidi",             # python-bidi — RTL text direction support in easyocr
+    "fsspec",           # file-system abstraction used by huggingface_hub
+    "six",              # compatibility shim used by several of the above
 ]:
     d, b, h = collect_all(pkg)
     datas    += d
@@ -187,11 +198,73 @@ hiddenimports += [
     # in timm 1.x that re-exports from timm.layers, so both must be bundled.
     "timm.layers",
     "timm.models.layers",  # compat shim — needed by EasyOCR until it migrates
+    # ── scipy ─────────────────────────────────────────────────────────────────
+    # collect_all above bundles the C extensions; these entries ensure PyInstaller
+    # also traces all pure-Python sub-packages that it might miss via static analysis.
     "scipy",
     "scipy.special",
     "scipy.special._ufuncs",
+    "scipy.spatial",
+    "scipy.spatial.transform",
+    "scipy.spatial.transform._rotation_groups",
+    "scipy.sparse",
+    "scipy.sparse.csgraph",
+    "scipy.sparse._compressed",
+    "scipy.sparse._csr",
+    "scipy.sparse._csc",
+    "scipy.sparse._coo",
+    "scipy.linalg",
+    "scipy.linalg.blas",
+    "scipy.linalg.lapack",
+    "scipy.optimize",
+    "scipy.ndimage",
+    "scipy.stats",
+    "scipy.io",
+    "scipy.interpolate",
+    "scipy.signal",
+    "scipy.fft",
+    "scipy.integrate",
+    # ── scikit-learn ──────────────────────────────────────────────────────────
     "sklearn",
     "sklearn.utils",
+    "sklearn.utils._cython_blas",
+    "sklearn.utils._sorting",
+    "sklearn.utils._heap",
+    "sklearn.utils.murmurhash",
+    "sklearn.neighbors",
+    "sklearn.neighbors._partition_nodes",
+    "sklearn.cluster",
+    "sklearn.decomposition",
+    "sklearn.preprocessing",
+    "sklearn.metrics",
+    "sklearn.linear_model",
+    "sklearn.svm",
+    "sklearn.tree",
+    "sklearn.ensemble",
+    # ── PIL extras ────────────────────────────────────────────────────────────
+    "PIL.ImageFilter",
+    "PIL.ImageDraw",
+    "PIL.ImageFont",
+    "PIL.ImageEnhance",
+    "PIL.ImageChops",
+    "PIL.ImageColor",
+    "PIL.ImageStat",
+    "PIL.ImageSequence",
+    "PIL.JpegImagePlugin",
+    "PIL.PngImagePlugin",
+    "PIL.BmpImagePlugin",
+    "PIL.TiffImagePlugin",
+    # ── EasyOCR extras ────────────────────────────────────────────────────────
+    "easyocr.craft_utils",
+    "easyocr.imgproc",
+    "easyocr.model.modules",
+    "easyocr.model.vgg_model",
+    "easyocr.DBNet_utils",
+    # ── yaml (PyYAML) ─────────────────────────────────────────────────────────
+    "yaml",
+    # ── multiprocessing helpers used by torch DataLoader ─────────────────────
+    "multiprocessing.pool",
+    "multiprocessing.managers",
     # stdlib modules used by app.py at runtime — listed explicitly in case
     # a future PyInstaller version stops auto-collecting them
     "zipfile",
@@ -219,7 +292,6 @@ a = Analysis(
         "jupyter",
         "notebook",
         "pandas",
-        "scipy.spatial.transform._rotation_groups",
         # Test / benchmark infrastructure (large, never used at runtime)
         "torch.testing",
         "torch.utils.bottleneck",
