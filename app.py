@@ -161,10 +161,12 @@ def _resolve_models_dir() -> Optional[Path]:
 
     # 2. Bundled inside the frozen archive (fallback for builds that still
     #    include models in _MEIPASS)
-    bundled = Path(sys._MEIPASS) / "models"  # type: ignore[attr-defined]
-    if bundled.exists():
-        logging.info("Using bundled models from %s", bundled)
-        return bundled
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass is not None:
+        bundled = Path(meipass) / "models"
+        if bundled.exists():
+            logging.info("Using bundled models from %s", bundled)
+            return bundled
 
     return None
 
