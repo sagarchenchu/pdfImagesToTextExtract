@@ -708,3 +708,113 @@ class TestTrocrReadSingle:
             result = app._trocr_read(img)
         mock_batch.assert_called_once_with([img])
         assert result == "hello"
+
+
+# ===========================================================================
+# 12. _detect_regions
+# ===========================================================================
+
+class TestDetectRegions:
+    def test_calls_reader_readtext_with_numpy_array(self):
+        """_detect_regions must call reader.readtext with a numpy array."""
+        import numpy as np
+        image = _solid_image(100, 50)
+        expected = [([[0, 0], [10, 0], [10, 5], [0, 5]], "text", 0.9)]
+        mock_reader = MagicMock()
+        mock_reader.readtext = MagicMock(return_value=expected)
+
+        result = app._detect_regions(image, mock_reader)
+
+        mock_reader.readtext.assert_called_once()
+        call_args = mock_reader.readtext.call_args
+        assert isinstance(call_args[0][0], np.ndarray)
+        assert result == expected
+
+    def test_returns_empty_list_when_no_detections(self):
+        image = _solid_image(100, 50)
+        mock_reader = MagicMock()
+        mock_reader.readtext = MagicMock(return_value=[])
+
+        result = app._detect_regions(image, mock_reader)
+
+        assert result == []
+
+    def test_passes_detail_and_paragraph_kwargs(self):
+        """readtext must be called with detail=1, paragraph=False."""
+        image = _solid_image(80, 60)
+        mock_reader = MagicMock()
+        mock_reader.readtext = MagicMock(return_value=[])
+
+        app._detect_regions(image, mock_reader)
+
+        _, kwargs = mock_reader.readtext.call_args
+        assert kwargs.get("detail") == 1
+        assert kwargs.get("paragraph") is False
+
+
+# ===========================================================================
+# 13. _extract_from_image — pre-computed detections parameter
+# ===========================================================================
+
+class TestExtractFromImagePrecomputedDetections:
+    """Tests for _extract_from_image when detections are pre-provided."""
+
+    def test_reader_readtext_not_called_when_detections_provided(self):
+        """When detections are pre-provided, EasyOCR readtext must be skipped."""
+        image = _solid_image(200, 100)
+        bbox = [[10, 10], [80, 10], [80, 40], [10, 40]]
+        detections = [(bbox, "easy_text", 0.9)]
+        mock_reader = MagicMock()
+
+        with patch("app._trocr_read_batch", return_value=["result"]):
+            results = app._extract_from_image(
+                image,
+                label="test",
+                progress_cb=_dummy_progress_cb,
+                status_cb=_dummy_status_cb,
+                append_cb=lambda _: None,
+                reader=mock_reader,
+                detections=detections,
+            )
+
+        mock_reader.readtext.assert_not_called()
+        assert results == ["result"]
+
+    def test_precomputed_empty_detections_returns_empty(self):
+        """Pre-provided empty detections list → no text detected, returns []."""
+        image = _solid_image(200, 100)
+        appended = []
+
+        results = app._extract_from_image(
+            image,
+            label="pg",
+            progress_cb=_dummy_progress_cb,
+            status_cb=_dummy_status_cb,
+            append_cb=appended.append,
+            reader=MagicMock(),
+            detections=[],
+        )
+
+        assert results == []
+        assert any("No text detected" in t for t in appended)
+
+    def test_precomputed_detections_produce_correct_results(self):
+        """Text from pre-provided detections must be recognised correctly."""
+        image = _solid_image(400, 200)
+        detections = [
+            ([[10, 10], [100, 10], [100, 40], [10, 40]], "line1", 0.9),
+            ([[10, 50], [100, 50], [100, 80], [10, 80]], "line2", 0.9),
+        ]
+
+        with patch("app._trocr_read_batch", return_value=["TrOCR A", "TrOCR B"]):
+            results = app._extract_from_image(
+                image,
+                label="test",
+                progress_cb=_dummy_progress_cb,
+                status_cb=_dummy_status_cb,
+                append_cb=lambda _: None,
+                reader=MagicMock(),
+                detections=detections,
+            )
+
+        assert results == ["TrOCR A", "TrOCR B"]
