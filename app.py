@@ -370,6 +370,13 @@ def _trocr_read(image_crop: Image.Image) -> str:
 # Keep at ≤ 16 to avoid excessive peak memory usage.
 _TROCR_BATCH_SIZE = 16
 
+# Maximum number of background threads used for parallel EasyOCR detection.
+# All page-detection futures are submitted upfront so up to _WORKER_THREADS
+# EasyOCR jobs run concurrently while TrOCR processes earlier pages.
+# EasyOCR's PyTorch backend releases the GIL during inference, enabling
+# genuine CPU parallelism across cores.
+_WORKER_THREADS = 10
+
 
 def _trocr_read_batch(image_crops: List[Image.Image]) -> List[str]:
     """Run TrOCR inference on a batch of cropped images.
@@ -819,22 +826,18 @@ class HandwritingExtractorApp:
                     if ext == _PDF_EXT:
                         pages = _pdf_to_images(extracted_path)
                         n_pages = len(pages)
-                        # Pipeline: detect regions for page N+1 while TrOCR
-                        # processes page N's crops (different models → parallel CPU).
+                        # Pipeline: submit EasyOCR detection for ALL pages upfront
+                        # so up to _WORKER_THREADS detections run simultaneously.
                         # _next_det is always a Future inside the loop because
                         # pages is non-empty (n_pages > 0 was just computed).
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
-                            _next_det = (
-                                _pool.submit(_detect_regions, pages[0][1], ocr_reader)
-                                if pages else None
-                            )
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=_WORKER_THREADS) as _pool:
+                            det_futures = [
+                                _pool.submit(_detect_regions, img, ocr_reader)
+                                for _, img in pages
+                            ]
                             for page_i, (page_num, img) in enumerate(pages):
                                 page_share = file_share / n_pages
-                                detections = _next_det.result()
-                                _next_det = (
-                                    _pool.submit(_detect_regions, pages[page_i + 1][1], ocr_reader)
-                                    if page_i + 1 < n_pages else None
-                                )
+                                detections = det_futures[page_i].result()
                                 results = _extract_from_image(
                                     img,
                                     f"{name} – Page {page_num}/{n_pages}",
@@ -897,28 +900,21 @@ class HandwritingExtractorApp:
                     f"File : {os.path.basename(filepath)}\n"
                     f"Pages: {total}\n"
                 )
-                # Pipeline: run EasyOCR detection for the next page in a
-                # background thread while TrOCR processes the current page's
-                # crops.  Both models release the Python GIL during their heavy
-                # C++/BLAS work, so the two threads run in genuine parallel on
-                # a multi-core CPU.  For N pages this saves roughly (N-1) ×
-                # EasyOCR_time compared with the sequential approach.
+                # Pipeline: submit EasyOCR detection for ALL pages upfront so
+                # up to _WORKER_THREADS pages are detected simultaneously.
+                # TrOCR processes each page in order; by the time it reaches
+                # page N the detection result is already (or nearly) ready.
                 # _next_det is always a Future inside the loop because
                 # pages is non-empty (total > 0 was just computed).
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
-                    _next_det = (
-                        _pool.submit(_detect_regions, pages[0][1], ocr_reader)
-                        if pages else None
-                    )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=_WORKER_THREADS) as _pool:
+                    det_futures = [
+                        _pool.submit(_detect_regions, img, ocr_reader)
+                        for _, img in pages
+                    ]
                     for i, (page_num, img) in enumerate(pages):
                         share = 100.0 / total
                         # Collect this page's detections (may already be ready).
-                        detections = _next_det.result()
-                        # Pre-fetch detections for the next page while TrOCR runs.
-                        _next_det = (
-                            _pool.submit(_detect_regions, pages[i + 1][1], ocr_reader)
-                            if i + 1 < total else None
-                        )
+                        detections = det_futures[i].result()
                         results = _extract_from_image(
                             img,
                             f"Page {page_num}/{total}",

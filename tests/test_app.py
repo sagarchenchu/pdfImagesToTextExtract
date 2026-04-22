@@ -76,6 +76,10 @@ class TestConstants:
         assert isinstance(app._TROCR_BATCH_SIZE, int)
         assert app._TROCR_BATCH_SIZE > 0
 
+    def test_worker_threads_positive_int(self):
+        assert isinstance(app._WORKER_THREADS, int)
+        assert app._WORKER_THREADS > 0
+
     def test_trocr_model_name(self):
         assert "trocr" in app.TROCR_MODEL.lower()
 
