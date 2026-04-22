@@ -21,6 +21,22 @@ import zipfile
 from pathlib import Path
 from typing import List, Optional, Set
 
+# In a PyInstaller console=False build sys.stdout and sys.stderr are set to
+# None by the bootloader because no console is attached.  Some third-party
+# libraries (pip, rich, tqdm, …) call sys.stdout.isatty() or sys.stdout.write()
+# without guarding against None, which raises:
+#
+#   AttributeError: 'NoneType' object has no attribute 'isatty'
+#
+# Replace None streams with a no-op sink before any other code runs.
+# rthook_stdio.py does the same for the rthook phase; this guard covers the
+# case where app.py is run directly (non-frozen) and also provides defence-in-
+# depth for the frozen path.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+
 # On Windows the default console encoding (cp1252 / charmap) cannot represent
 # Unicode characters such as the FULL BLOCK (U+2588) used by tqdm progress bars
 # when ML models are downloaded on first run.  Reconfigure stdout/stderr to

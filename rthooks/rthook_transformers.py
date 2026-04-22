@@ -45,4 +45,5 @@ for _submod in (
         # Swallow to avoid aborting the EXE before the GUI opens; real import
         # failures will surface in app.py when the model is first used.
         import sys as _sys
-        print(f"[rthook_transformers] WARNING: could not pre-import {_submod}: {_e}", file=_sys.stderr)
+        if _sys.stderr is not None:
+            print(f"[rthook_transformers] WARNING: could not pre-import {_submod}: {_e}", file=_sys.stderr)

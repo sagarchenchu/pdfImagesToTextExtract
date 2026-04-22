@@ -284,7 +284,11 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=["rthooks/rthook_torchvision.py", "rthooks/rthook_transformers.py"],
+    runtime_hooks=[
+        "rthooks/rthook_stdio.py",        # must run first — redirects None stdout/stderr
+        "rthooks/rthook_torchvision.py",
+        "rthooks/rthook_transformers.py",
+    ],
     excludes=[
         # Unused UI / data-science packages that sneak in as transitive deps
         "matplotlib",
