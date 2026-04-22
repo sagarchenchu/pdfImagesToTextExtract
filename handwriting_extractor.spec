@@ -190,6 +190,9 @@ hiddenimports += [
     "scipy",
     "scipy.special",
     "scipy.special._ufuncs",
+    "scipy.spatial",
+    "scipy.spatial.transform",
+    "scipy.spatial.transform._rotation_groups",
     "sklearn",
     "sklearn.utils",
     # stdlib modules used by app.py at runtime — listed explicitly in case
@@ -219,7 +222,6 @@ a = Analysis(
         "jupyter",
         "notebook",
         "pandas",
-        "scipy.spatial.transform._rotation_groups",
         # Test / benchmark infrastructure (large, never used at runtime)
         "torch.testing",
         "torch.utils.bottleneck",
