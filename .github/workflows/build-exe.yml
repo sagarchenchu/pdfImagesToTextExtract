@@ -9,6 +9,7 @@ on:
       - "requirements.txt"
       - "handwriting_extractor.spec"
       - "rthooks/**"
+      - "download_models.py"
       - ".github/workflows/build-exe.yml"
   pull_request:
     branches: ["main", "master"]
@@ -33,9 +34,8 @@ jobs:
   build:
     name: Build EXE on Windows
     runs-on: windows-latest
-    # 60 minutes is enough now that ML models are no longer downloaded or
-    # bundled during the build — only pip installs and PyInstaller remain.
-    timeout-minutes: 60
+    # 120 minutes: pip install (~40 min) + model download (~40 min) + PyInstaller (~30 min).
+    timeout-minutes: 120
 
     steps:
       # ── Checkout ──────────────────────────────────────────────────────
@@ -60,10 +60,14 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller>=6.3.0
 
+      # ── Download ML models ────────────────────────────────────────────────
+      # Downloads TrOCR (~1.35 GB) and EasyOCR (~250 MB) into models\trocr\
+      # and models\easyocr\ so they can be zipped and attached to the release.
+      - name: Download ML models
+        run: python download_models.py
+        timeout-minutes: 60
+
       # ── Build ─────────────────────────────────────────────────────────
-      # ML models are NOT downloaded or bundled here.
-      # Users place a models\ folder next to the EXE after extracting.
-      # See README.md for download links and the required folder layout.
       - name: Build with PyInstaller
         run: pyinstaller handwriting_extractor.spec --noconfirm
         timeout-minutes: 30
@@ -99,6 +103,26 @@ jobs:
           Set-Location ..
           Write-Host "Archive size:"
           Get-Item "dist\HandwritingExtractor-Windows-x64.zip" |
+            Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+
+      # ── Zip ML models ─────────────────────────────────────────────────
+      # Split into two archives to stay well below GitHub's 2 GB asset limit.
+      - name: Zip TrOCR models
+        run: |
+          & "C:\Program Files\7-Zip\7z.exe" a -tzip `
+            "dist\models-trocr.zip" `
+            "models\trocr"
+          Write-Host "models-trocr.zip size:"
+          Get-Item "dist\models-trocr.zip" |
+            Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Zip EasyOCR models
+        run: |
+          & "C:\Program Files\7-Zip\7z.exe" a -tzip `
+            "dist\models-easyocr.zip" `
+            "models\easyocr"
+          Write-Host "models-easyocr.zip size:"
+          Get-Item "dist\models-easyocr.zip" |
             Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
       # ── Upload as workflow artifact ───────────────────────────────────
@@ -139,9 +163,13 @@ jobs:
 
             ### How to install
 
-            1. Download **`HandwritingExtractor-Windows-x64.zip`** below
-            2. Extract to a folder, e.g. `C:\HandwritingExtractor\`
-            3. Download the ML models (see links) and place them in a `models\` folder **next to** the EXE:
+            1. Download **`HandwritingExtractor-Windows-x64.zip`** below and extract to a folder, e.g. `C:\HandwritingExtractor\`
+            2. Download **`models-trocr.zip`** and **`models-easyocr.zip`** below
+            3. Inside the extracted `HandwritingExtractor\` folder, create a `models\` sub-folder
+            4. Extract `models-trocr.zip` — this gives you a `trocr\` folder; move it to `models\trocr\`
+            5. Extract `models-easyocr.zip` — this gives you an `easyocr\` folder; move it to `models\easyocr\`
+
+            The final layout should look like:
 
             ```
             HandwritingExtractor\
@@ -149,35 +177,14 @@ jobs:
                 models\
                     trocr\
                         config.json
-                        generation_config.json
-                        preprocessor_config.json
-                        tokenizer_config.json
-                        vocab.json
-                        merges.txt
-                        special_tokens_map.json
-                        pytorch_model.bin          (~1.35 GB)
+                        pytorch_model.bin
+                        …
                     easyocr\
-                        craft_mlt_25k.pth          (~90 MB)
-                        english_g2.pth             (~160 MB)
+                        craft_mlt_25k.pth
+                        english_g2.pth
             ```
 
-            4. Run **`HandwritingExtractor.exe`**
-
-            ### Model download links
-
-            **TrOCR** (`microsoft/trocr-large-handwritten`) — place all files in `models\trocr\`:
-            - [config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/config.json)
-            - [generation_config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/generation_config.json)
-            - [preprocessor_config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/preprocessor_config.json)
-            - [tokenizer_config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/tokenizer_config.json)
-            - [vocab.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/vocab.json)
-            - [merges.txt](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/merges.txt)
-            - [special_tokens_map.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/special_tokens_map.json)
-            - [pytorch_model.bin (~1.35 GB)](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/pytorch_model.bin)
-
-            **EasyOCR** — unzip each archive and place the `.pth` file in `models\easyocr\`:
-            - [craft_mlt_25k.zip (~90 MB)](https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip)
-            - [english_g2.zip (~160 MB)](https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/english_g2.zip)
+            6. Run **`HandwritingExtractor.exe`**
 
             ### What it does
             - Upload a **PDF** or **image** (PNG/JPG/TIFF/BMP/WebP)
@@ -187,7 +194,10 @@ jobs:
             - Displays full results and lets you save them as a `.txt` file
 
             Built from commit: `${{ github.sha }}`
-          files: dist/HandwritingExtractor-Windows-x64.zip
+          files: |
+            dist/HandwritingExtractor-Windows-x64.zip
+            dist/models-trocr.zip
+            dist/models-easyocr.zip
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true
