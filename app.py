@@ -327,13 +327,15 @@ def _pdf_to_images(pdf_path: str) -> list:
     import fitz  # PyMuPDF
     images = []
     doc = fitz.open(pdf_path)
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        mat = fitz.Matrix(2.0, 2.0)
-        pix = page.get_pixmap(matrix=mat)
-        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        images.append((page_num + 1, img))
-    doc.close()
+    try:
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat)
+            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            images.append((page_num + 1, img))
+    finally:
+        doc.close()
     return images
 
 
