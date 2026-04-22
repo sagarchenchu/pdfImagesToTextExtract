@@ -195,6 +195,12 @@ hiddenimports += [
     # stdlib modules used by app.py at runtime — listed explicitly in case
     # a future PyInstaller version stops auto-collecting them
     "zipfile",
+    # html.parser and related stdlib HTML modules — required by requests,
+    # huggingface_hub, and transformers for HTML response parsing; PyInstaller
+    # occasionally misses these standard-library modules in the frozen bundle.
+    "html",
+    "html.parser",
+    "html.entities",
 ]
 
 a = Analysis(
