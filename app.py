@@ -148,10 +148,38 @@ def _bundled_easyocr_model_dir() -> Optional[str]:
     return None
 
 
+def _warm_torchvision() -> None:
+    """
+    Pre-import torchvision sub-packages in the correct dependency order.
+
+    torchvision >= 0.16 uses a lazy loader in ``__init__.py``.  If a
+    downstream package (easyocr, timm) executes
+    ``from torchvision import models`` while ``__init__`` is still running,
+    Python raises::
+
+        ImportError: cannot import name 'models' from partially initialized
+        module 'torchvision' (most likely due to a circular import)
+
+    Calling this function once, before ``import easyocr``, ensures the full
+    module registry is populated and avoids that race.  The rthook
+    ``rthooks/rthook_torchvision.py`` calls this same function at EXE startup
+    for the frozen-build path.
+    """
+    try:
+        import torchvision                        # noqa: F401
+        import torchvision.models                 # noqa: F401
+        import torchvision.ops                    # noqa: F401
+        import torchvision.transforms             # noqa: F401
+        import torchvision.transforms.functional  # noqa: F401
+    except Exception:
+        logging.warning("torchvision pre-import warning:\n%s", traceback.format_exc())
+
+
 def _load_easyocr(status_cb):
     global _easyocr_reader
     if _easyocr_reader is None:
         status_cb("Loading EasyOCR model…")
+        _warm_torchvision()
         import easyocr
         kwargs: dict = {"gpu": _get_device() == "cuda"}
         model_dir = _bundled_easyocr_model_dir()
@@ -259,12 +287,22 @@ def _extract_from_image(
     append_cb,
     progress_start: float = 0.0,
     progress_share: float = 100.0,
+    reader=None,
 ) -> list:
     """
     Detect text regions with EasyOCR, read each with TrOCR.
-    Returns list of recognised strings.
+
+    Parameters
+    ----------
+    reader:
+        An initialised ``easyocr.Reader`` instance.  When *None* (default)
+        the module-level ``_easyocr_reader`` global is used; callers should
+        prefer passing the reader explicitly to avoid relying on global state.
+
+    Returns a list of recognised strings.
     """
-    reader = _easyocr_reader
+    if reader is None:
+        reader = _easyocr_reader
     img_array = np.array(image)
 
     status_cb(f"[{label}] Detecting text regions with EasyOCR…")
@@ -308,6 +346,10 @@ def _extract_from_image(
                 append_cb(text + "\n")
 
         except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "[%s] TrOCR failed on region %d/%d — falling back to EasyOCR text.\n%s",
+                label, idx + 1, n, traceback.format_exc(),
+            )
             fallback = easy_text.strip()
             if fallback:
                 results.append(fallback)
@@ -567,8 +609,10 @@ class HandwritingExtractorApp:
     def _run_extraction(self):
         try:
             logging.info("Extraction started for: %s", self._selected_file)
-            # Load models
-            _load_easyocr(self._set_status)
+            # Load models and capture the returned objects explicitly so we
+            # never depend on the module-level globals being readable from
+            # another call stack (e.g. after an edge-case exception path).
+            ocr_reader = _load_easyocr(self._set_status)
             logging.info("EasyOCR loaded OK")
             _load_trocr(self._set_status)
             logging.info("TrOCR loaded OK")
@@ -597,6 +641,7 @@ class HandwritingExtractorApp:
                         append_cb=self._append_text,
                         progress_start=i * share,
                         progress_share=share,
+                        reader=ocr_reader,
                     )
                     all_results.extend(results)
             else:
@@ -610,6 +655,7 @@ class HandwritingExtractorApp:
                     append_cb=self._append_text,
                     progress_start=0.0,
                     progress_share=100.0,
+                    reader=ocr_reader,
                 )
 
             self._set_progress(100)
