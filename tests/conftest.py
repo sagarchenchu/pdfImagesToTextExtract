@@ -22,15 +22,24 @@ def _make_module(name: str, **attrs) -> types.ModuleType:
 
 # ── tkinter stubs ────────────────────────────────────────────────────────────
 # tkinter is not available in the headless CI/test environment.
+#
+# IMPORTANT: widget classes must NOT be MagicMock directly.  MagicMock's first
+# positional parameter is `spec`, so calling  tk.Frame(parent_mock, ...)  where
+# parent_mock is also a MagicMock raises:
+#   InvalidSpecError: Cannot spec a Mock object.
+# Using a plain lambda factory bypasses this because lambdas have no `spec`
+# parameter — they just forward all args to a fresh MagicMock().
+_widget = lambda *a, **kw: MagicMock()  # noqa: E731
+
 _tk_root_mock = MagicMock()
 _tk_stub = _make_module(
     "tkinter",
-    Tk=MagicMock(return_value=_tk_root_mock),
-    Frame=MagicMock,
-    Label=MagicMock,
-    Button=MagicMock,
-    Text=MagicMock,
-    LabelFrame=MagicMock,
+    Tk=lambda: _tk_root_mock,
+    Frame=_widget,
+    Label=_widget,
+    Button=_widget,
+    Text=_widget,
+    LabelFrame=_widget,
     X="x",
     Y="y",
     BOTH="both",
@@ -49,7 +58,12 @@ _tk_stub = _make_module(
 )
 sys.modules.setdefault("tkinter", _tk_stub)
 
-for _sub in ("ttk", "filedialog", "messagebox", "scrolledtext"):
+# ttk and scrolledtext also create widgets — give them lambda-based factories too
+_ttk_stub = _make_module("tkinter.ttk", Progressbar=_widget, Combobox=_widget, Entry=_widget)
+sys.modules.setdefault("tkinter.ttk", _ttk_stub)
+_scrolledtext_stub = _make_module("tkinter.scrolledtext", ScrolledText=_widget)
+sys.modules.setdefault("tkinter.scrolledtext", _scrolledtext_stub)
+for _sub in ("filedialog", "messagebox"):
     sys.modules.setdefault(f"tkinter.{_sub}", MagicMock())
 
 # ── torch stub ───────────────────────────────────────────────────────────────
