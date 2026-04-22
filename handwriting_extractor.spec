@@ -152,7 +152,8 @@ hiddenimports += [
     "transformers.models.vit",
     "transformers.models.vit.modeling_vit",
     "transformers.models.vit.configuration_vit",
-    "transformers.models.vit.feature_extraction_vit",
+    # feature_extraction_vit is a deprecated shim; image_processing_vit is the modern replacement
+    # (listed explicitly further below as it is the primary module needed at runtime)
     "transformers.models.roberta",
     "transformers.models.roberta.modeling_roberta",
     "transformers.models.roberta.configuration_roberta",
@@ -166,7 +167,7 @@ hiddenimports += [
     # ViT image processor — the primary missing module that causes the
     # LazyModule._get_module RuntimeError when importing TrOCRProcessor
     "transformers.models.vit.image_processing_vit",
-    "transformers.models.trocr.feature_extraction_trocr",
+    "transformers.models.trocr.processing_trocr",  # replaces deprecated feature_extraction_trocr
     "transformers.modeling_utils",
     "transformers.tokenization_utils",
     "transformers.tokenization_utils_fast",
@@ -181,6 +182,11 @@ hiddenimports += [
     "easyocr.recognition",
     "easyocr.utils",
     "easyocr.config",
+    # timm.layers is the modern API (replaces deprecated timm.models.layers).
+    # EasyOCR currently imports via timm.models.layers which is a compat shim
+    # in timm 1.x that re-exports from timm.layers, so both must be bundled.
+    "timm.layers",
+    "timm.models.layers",  # compat shim — needed by EasyOCR until it migrates
     "scipy",
     "scipy.special",
     "scipy.special._ufuncs",

@@ -252,7 +252,7 @@ def _load_trocr(status_cb):
             from transformers import TrOCRProcessor, VisionEncoderDecoderModel
             # Verify the lazy import actually resolved the class (it can silently
             # produce a dummy object when sentencepiece / tokenizers is missing).
-            if not (isinstance(TrOCRProcessor, type) and hasattr(TrOCRProcessor, "from_pretrained")):
+            if not isinstance(TrOCRProcessor, type):
                 raise AttributeError("TrOCRProcessor is not a valid class")
         except (ImportError, AttributeError) as _lazy_err:
             logging.warning(

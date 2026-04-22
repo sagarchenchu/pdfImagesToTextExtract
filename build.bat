@@ -43,6 +43,11 @@ pip install pyinstaller --quiet
 REM ── 3. Run PyInstaller ────────────────────────────────────────
 echo.
 echo [3/4] Building EXE with PyInstaller…
+REM Suppress known third-party deprecation warnings that appear during
+REM PyInstaller analysis but do not affect the built EXE:
+REM   timm.models.layers  – EasyOCR uses the old timm API; compat shim still works.
+REM   torch.distributed   – deprecated internal modules that self-warn when analysed.
+set "PYTHONWARNINGS=ignore::FutureWarning:timm.models.layers,ignore::DeprecationWarning:torch.distributed"
 pyinstaller handwriting_extractor.spec --noconfirm
 
 REM ── 4. Done ───────────────────────────────────────────────────
