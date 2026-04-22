@@ -32,10 +32,12 @@ from typing import List, Optional, Set
 # rthook_stdio.py does the same for the rthook phase; this guard covers the
 # case where app.py is run directly (non-frozen) and also provides defence-in-
 # depth for the frozen path.
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stdout is None or sys.stderr is None:
+    _devnull = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: WPS515
+    if sys.stdout is None:
+        sys.stdout = _devnull
+    if sys.stderr is None:
+        sys.stderr = _devnull
 
 # On Windows the default console encoding (cp1252 / charmap) cannot represent
 # Unicode characters such as the FULL BLOCK (U+2588) used by tqdm progress bars

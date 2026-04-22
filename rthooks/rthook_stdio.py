@@ -16,7 +16,9 @@
 import os
 import sys
 
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stdout is None or sys.stderr is None:
+    _devnull = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: WPS515
+    if sys.stdout is None:
+        sys.stdout = _devnull
+    if sys.stderr is None:
+        sys.stderr = _devnull
