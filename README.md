@@ -1,7 +1,7 @@
 # Handwriting Text Extractor
 
 > Extract **handwritten text** from PDF files and images using a modern
-> **EasyOCR + TrOCR** pipeline — packaged as a single Windows `.exe`.
+> **EasyOCR + TrOCR** pipeline — packaged as a Windows `.exe`.
 
 ---
 
@@ -22,11 +22,64 @@
 
 1. Go to the **[Releases](../../releases)** tab and download
    `HandwritingExtractor-Windows-x64.zip`
-2. Extract the zip to any folder
-3. Run **`HandwritingExtractor.exe`**
+2. Extract the zip to any folder, e.g. `C:\HandwritingExtractor\`
+3. Download the ML models (see table below) and place them in a `models\` folder
+   **next to** `HandwritingExtractor.exe`
+4. Run **`HandwritingExtractor.exe`**
 
-> **No internet connection required.** ML models are bundled inside the
-> distribution folder — the app works fully offline.
+> **Works fully offline after models are placed next to the EXE.**
+> No internet connection is needed at runtime.
+
+### 📦 Required model files
+
+Download these files once and keep them in the folder layout shown below.
+
+#### TrOCR — `microsoft/trocr-large-handwritten` (~1.35 GB total)
+
+Place all files in `models\trocr\`:
+
+| File | Download |
+|------|----------|
+| `config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/config.json) |
+| `generation_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/generation_config.json) |
+| `preprocessor_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/preprocessor_config.json) |
+| `tokenizer_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/tokenizer_config.json) |
+| `vocab.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/vocab.json) |
+| `merges.txt` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/merges.txt) |
+| `special_tokens_map.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/special_tokens_map.json) |
+| `pytorch_model.bin` (~1.35 GB) | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/pytorch_model.bin) |
+
+#### EasyOCR (~250 MB total)
+
+Place the `.pth` files (unzipped) in `models\easyocr\`:
+
+| File | Download |
+|------|----------|
+| `craft_mlt_25k.pth` (~90 MB) | [↓ download (zip)](https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip) |
+| `english_g2.pth` (~160 MB) | [↓ download (zip)](https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/english_g2.zip) |
+
+> Unzip each archive and place the `.pth` file inside `models\easyocr\`.
+
+### 📁 Required folder layout
+
+```
+HandwritingExtractor\
+    HandwritingExtractor.exe
+    models\
+        trocr\
+            config.json
+            generation_config.json
+            preprocessor_config.json
+            tokenizer_config.json
+            vocab.json
+            merges.txt
+            special_tokens_map.json
+            pytorch_model.bin
+        easyocr\
+            craft_mlt_25k.pth
+            english_g2.pth
+    (other EXE support files…)
+```
 
 ---
 
@@ -49,12 +102,15 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 pip install pyinstaller
-python download_models.py          REM download TrOCR + EasyOCR models (~1.25 GB)
 pyinstaller handwriting_extractor.spec --noconfirm
 ```
 
 The finished application is in `dist\HandwritingExtractor\`.
-Zip that folder and distribute it — `HandwritingExtractor.exe` is inside.
+Place the `models\` folder (see layout above) next to the EXE, then zip and distribute.
+
+> **Proxy / offline environments:** the build step requires no internet access.
+> Download the model files on any machine with internet access, copy them over,
+> and place them in `models\` next to the EXE.
 
 ### Run without building
 
@@ -69,15 +125,13 @@ python app.py
 
 ## ⚙️ Automatic CI/CD build
 
-Every push to `main` that changes `app.py`, `requirements.txt`, `download_models.py`,
-or the spec file triggers the **Build Windows EXE** GitHub Actions workflow
+Every push to `main` that changes `app.py`, `requirements.txt`, or the spec file
+triggers the **Build Windows EXE** GitHub Actions workflow
 (`.github/workflows/build-exe.yml`).
 
-* Models are downloaded during the CI build and bundled into the EXE — **no
-  internet access is needed** on the end-user's machine.
-* The compiled zip is uploaded as a **workflow artifact** (retained 30 days).
-* Push a `v*.*.*` tag to automatically create a **GitHub Release** with the
-  zip attached.
+* The compiled application zip (without models) is uploaded as a **workflow artifact** (retained 30 days).
+* Push a `v*.*.*` tag to automatically create a **GitHub Release** with the zip attached.
+* After downloading, add the `models\` folder next to the EXE (see layout above).
 
 ---
 

@@ -4,7 +4,6 @@ PyInstaller spec for HandwritingExtractor.exe
 =============================================
 Build command (from repo root, on Windows with Python 3.10/3.11):
 
-    python download_models.py          # one-time: pre-download ML models
     pip install pyinstaller
     pyinstaller handwriting_extractor.spec
 
@@ -13,9 +12,20 @@ The resulting exe is written to  dist\HandwritingExtractor\HandwritingExtractor.
 
 Notes
 -----
-* ML models (TrOCR ~1 GB, EasyOCR ~250 MB) are bundled inside the distribution
-  folder so the application works fully offline with no internet connection needed.
-  Run  download_models.py  before this spec to populate the  models/  directory.
+* ML models (TrOCR ~1 GB, EasyOCR ~250 MB) are NOT bundled into the EXE.
+  Instead, place a  models\  folder next to HandwritingExtractor.exe after
+  extracting the distribution:
+
+      HandwritingExtractor\
+          HandwritingExtractor.exe
+          models\
+              trocr\          <- microsoft/trocr-large-handwritten files
+              easyocr\        <- craft_mlt_25k.pth + english_g2.pth
+
+  See README.md for download links.  At runtime the EXE checks for the
+  sideloaded  models\  folder first and falls back to any bundled copy
+  inside _MEIPASS (kept for backwards compatibility).
+
 * The --onedir layout is used here because PyTorch DLLs expand to ~3 GB
   which makes --onefile extremely slow on startup (it must unpack to %TEMP%
   every launch).  Zip the dist\HandwritingExtractor folder for distribution.
@@ -69,25 +79,10 @@ for pkg in [
 # so the directory tree exists on disk.
 datas += collect_data_files("transformers", include_py_files=True)
 
-# ── Bundle pre-downloaded ML models ───────────────────────────────────────
-# Run  download_models.py  before this spec to populate these directories.
+# ── ML models are NOT bundled — they are sideloaded at runtime ────────────
+# Place a  models\  folder next to HandwritingExtractor.exe after extracting.
+# See README.md for download links and the expected folder layout.
 _spec_root = Path(SPECPATH)  # noqa: F821 – PyInstaller built-in
-
-_trocr_dir = _spec_root / "models" / "trocr"
-if _trocr_dir.exists():
-    datas += [(str(_trocr_dir), "models/trocr")]
-    print(f"INFO: Bundling TrOCR model from {_trocr_dir}")
-else:
-    print("WARNING: models/trocr not found – run  python download_models.py  first.")
-    print("         The EXE will require internet access on first launch to download models.")
-
-_easyocr_dir = _spec_root / "models" / "easyocr"
-if _easyocr_dir.exists():
-    datas += [(str(_easyocr_dir), "models/easyocr")]
-    print(f"INFO: Bundling EasyOCR models from {_easyocr_dir}")
-else:
-    print("WARNING: models/easyocr not found – run  python download_models.py  first.")
-    print("         The EXE will require internet access on first launch to download models.")
 
 # Extra hidden imports that static analysis sometimes misses
 hiddenimports += [
