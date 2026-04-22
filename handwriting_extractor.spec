@@ -138,13 +138,20 @@ hiddenimports += [
     "transformers.models.auto.modeling_auto",
     "transformers.models.auto.tokenization_auto",
     "transformers.models.auto.processing_auto",
+    # ViT image processor — the primary missing module that causes the
+    # LazyModule._get_module RuntimeError when importing TrOCRProcessor
+    "transformers.models.vit.image_processing_vit",
+    "transformers.models.trocr.feature_extraction_trocr",
     "transformers.modeling_utils",
     "transformers.tokenization_utils",
     "transformers.tokenization_utils_fast",
     "transformers.processing_utils",
     "transformers.feature_extraction_utils",
     "transformers.image_processing_utils",
+    "transformers.image_processing_base",
     "transformers.image_transforms",
+    "transformers.image_utils",
+    "transformers.tokenization_utils_base",
     "easyocr.detection",
     "easyocr.recognition",
     "easyocr.utils",
@@ -154,6 +161,9 @@ hiddenimports += [
     "scipy.special._ufuncs",
     "sklearn",
     "sklearn.utils",
+    # stdlib modules used by app.py at runtime — listed explicitly in case
+    # a future PyInstaller version stops auto-collecting them
+    "zipfile",
 ]
 
 a = Analysis(
@@ -164,7 +174,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=["rthooks/rthook_torchvision.py"],
+    runtime_hooks=["rthooks/rthook_torchvision.py", "rthooks/rthook_transformers.py"],
     excludes=[
         # Cut down size by removing things we don't need
         "matplotlib",

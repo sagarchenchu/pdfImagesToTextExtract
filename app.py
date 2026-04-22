@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import traceback
+import zipfile
 from pathlib import Path
 from typing import List, Optional, Set
 
@@ -83,6 +84,14 @@ _trocr_model = None
 _device = None
 
 TROCR_MODEL = "microsoft/trocr-large-handwritten"
+
+# Supported file extensions — single source of truth used by both the upload
+# dialog and the ZIP entry filter.
+_IMAGE_EXTS: frozenset = frozenset(
+    {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
+)
+_PDF_EXT: str = ".pdf"
+_ZIP_EXT: str = ".zip"
 
 
 def _get_device():
@@ -243,7 +252,8 @@ def _load_trocr(status_cb):
             from transformers import TrOCRProcessor, VisionEncoderDecoderModel
             # Verify the lazy import actually resolved the class (it can silently
             # produce a dummy object when sentencepiece / tokenizers is missing).
-            _ = TrOCRProcessor.from_pretrained  # AttributeError → use fallback
+            if not hasattr(TrOCRProcessor, "from_pretrained"):
+                raise AttributeError("TrOCRProcessor.from_pretrained not found")
         except (ImportError, AttributeError) as _lazy_err:
             logging.warning(
                 "transformers lazy import of TrOCRProcessor failed (%s) — "
@@ -499,7 +509,7 @@ class HandwritingExtractorApp:
 
         tk.Label(
             header,
-            text="EasyOCR (layout detection)  +  TrOCR (handwriting recognition)  |  PDF & Image support",
+            text="EasyOCR (layout detection)  +  TrOCR (handwriting recognition)  |  PDF, Image & ZIP support",
             font=("Segoe UI", 9),
             fg="#90caf9",
             bg="#1a237e",
@@ -556,7 +566,7 @@ class HandwritingExtractorApp:
 
         self._lbl_status = tk.Label(
             prog_frame,
-            text=f"Ready – upload a PDF or image file to begin.  (Log: {_LOG_PATH})",
+            text=f"Ready – upload a PDF, image, or ZIP file to begin.  (Log: {_LOG_PATH})",
             font=("Segoe UI", 9),
             fg="#37474f",
             bg="#f5f5f5",
@@ -616,13 +626,15 @@ class HandwritingExtractorApp:
     # ------------------------------------------------------------------
 
     def _on_upload(self):
+        img_glob = " ".join(f"*{e}" for e in sorted(_IMAGE_EXTS))
         filetypes = [
-            ("Supported files", "*.pdf *.png *.jpg *.jpeg *.bmp *.tiff *.tif *.webp"),
+            ("Supported files", f"*.pdf {img_glob} *.zip"),
             ("PDF files", "*.pdf"),
-            ("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff *.tif *.webp"),
+            ("Image files", img_glob),
+            ("ZIP archives", "*.zip"),
             ("All files", "*.*"),
         ]
-        path = filedialog.askopenfilename(title="Select PDF or Image", filetypes=filetypes)
+        path = filedialog.askopenfilename(title="Select PDF, Image, or ZIP archive", filetypes=filetypes)
         if path:
             self._selected_file = path
             name = os.path.basename(path)
@@ -708,6 +720,100 @@ class HandwritingExtractorApp:
     # Extraction pipeline (runs in background thread)
     # ------------------------------------------------------------------
 
+    def _run_zip_extraction(self, zip_path: str, ocr_reader) -> List[str]:
+        """Extract and process every supported file found inside a ZIP archive.
+
+        Files are extracted one at a time into a temporary directory so peak
+        disk usage stays low.  PDFs are converted page-by-page; images are
+        processed directly.  The temporary directory is deleted when done.
+
+        Returns the combined list of recognised text lines.
+        """
+        import shutil
+
+        all_results: List[str] = []
+        supported_exts = _IMAGE_EXTS | {_PDF_EXT}
+
+        tmp_dir = tempfile.mkdtemp(prefix="HandwritingExtractor_zip_")
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                # Collect supported entries in a single open of the archive
+                entries = [
+                    e for e in zf.infolist()
+                    if not e.is_dir()
+                    and not os.path.basename(e.filename).startswith(".")
+                    and Path(e.filename).suffix.lower() in supported_exts
+                ]
+
+                if not entries:
+                    self._append_text(
+                        f"ZIP: {os.path.basename(zip_path)}\n"
+                        "No supported files (PDF/image) found inside the archive.\n"
+                    )
+                    return all_results
+
+                total = len(entries)
+                self._append_text(
+                    f"ZIP : {os.path.basename(zip_path)}\n"
+                    f"Files: {total}\n"
+                )
+                logging.info("ZIP extraction: %d supported files in %s", total, zip_path)
+
+                for file_idx, entry in enumerate(entries):
+                    name = os.path.basename(entry.filename)
+                    ext = Path(name).suffix.lower()
+                    file_share = 100.0 / total
+                    progress_start = file_idx * file_share
+
+                    self._set_status(f"[ZIP {file_idx + 1}/{total}] Extracting '{name}'…")
+                    self._set_progress(progress_start)
+
+                    # Extract this single entry into the temp dir
+                    extracted_path = os.path.join(tmp_dir, name)
+                    with zf.open(entry) as src, open(extracted_path, "wb") as dst:
+                        dst.write(src.read())
+
+                    if ext == _PDF_EXT:
+                        pages = _pdf_to_images(extracted_path)
+                        n_pages = len(pages)
+                        for page_i, (page_num, img) in enumerate(pages):
+                            page_share = file_share / n_pages
+                            results = _extract_from_image(
+                                img,
+                                f"{name} – Page {page_num}/{n_pages}",
+                                progress_cb=self._set_progress,
+                                status_cb=self._set_status,
+                                append_cb=self._append_text,
+                                progress_start=progress_start + page_i * page_share,
+                                progress_share=page_share,
+                                reader=ocr_reader,
+                            )
+                            all_results.extend(results)
+                    else:
+                        img = Image.open(extracted_path).convert("RGB")
+                        results = _extract_from_image(
+                            img,
+                            f"{name} ({file_idx + 1}/{total})",
+                            progress_cb=self._set_progress,
+                            status_cb=self._set_status,
+                            append_cb=self._append_text,
+                            progress_start=progress_start,
+                            progress_share=file_share,
+                            reader=ocr_reader,
+                        )
+                        all_results.extend(results)
+
+                    # Remove the extracted file immediately to keep disk usage low
+                    try:
+                        os.remove(extracted_path)
+                    except OSError:
+                        pass
+
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return all_results
+
     def _run_extraction(self):
         try:
             logging.info("Extraction started for: %s", self._selected_file)
@@ -746,6 +852,8 @@ class HandwritingExtractorApp:
                         reader=ocr_reader,
                     )
                     all_results.extend(results)
+            elif ext == ".zip":
+                all_results = self._run_zip_extraction(filepath, ocr_reader)
             else:
                 img = Image.open(filepath).convert("RGB")
                 self._append_text(f"File: {os.path.basename(filepath)}\n")
