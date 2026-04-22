@@ -821,6 +821,8 @@ class HandwritingExtractorApp:
                         n_pages = len(pages)
                         # Pipeline: detect regions for page N+1 while TrOCR
                         # processes page N's crops (different models → parallel CPU).
+                        # _next_det is always a Future inside the loop because
+                        # pages is non-empty (n_pages > 0 was just computed).
                         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
                             _next_det = (
                                 _pool.submit(_detect_regions, pages[0][1], ocr_reader)
@@ -828,7 +830,7 @@ class HandwritingExtractorApp:
                             )
                             for page_i, (page_num, img) in enumerate(pages):
                                 page_share = file_share / n_pages
-                                detections = _next_det.result() if _next_det is not None else []
+                                detections = _next_det.result()
                                 _next_det = (
                                     _pool.submit(_detect_regions, pages[page_i + 1][1], ocr_reader)
                                     if page_i + 1 < n_pages else None
@@ -901,6 +903,8 @@ class HandwritingExtractorApp:
                 # C++/BLAS work, so the two threads run in genuine parallel on
                 # a multi-core CPU.  For N pages this saves roughly (N-1) ×
                 # EasyOCR_time compared with the sequential approach.
+                # _next_det is always a Future inside the loop because
+                # pages is non-empty (total > 0 was just computed).
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
                     _next_det = (
                         _pool.submit(_detect_regions, pages[0][1], ocr_reader)
@@ -909,7 +913,7 @@ class HandwritingExtractorApp:
                     for i, (page_num, img) in enumerate(pages):
                         share = 100.0 / total
                         # Collect this page's detections (may already be ready).
-                        detections = _next_det.result() if _next_det is not None else []
+                        detections = _next_det.result()
                         # Pre-fetch detections for the next page while TrOCR runs.
                         _next_det = (
                             _pool.submit(_detect_regions, pages[i + 1][1], ocr_reader)
