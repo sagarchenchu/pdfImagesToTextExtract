@@ -8,7 +8,7 @@ on:
       - "app.py"
       - "requirements.txt"
       - "handwriting_extractor.spec"
-      - "download_models.py"
+      - "rthooks/**"
       - ".github/workflows/build-exe.yml"
   pull_request:
     branches: ["main", "master"]
@@ -16,7 +16,7 @@ on:
       - "app.py"
       - "requirements.txt"
       - "handwriting_extractor.spec"
-      - "download_models.py"
+      - "rthooks/**"
   workflow_dispatch:          # allow manual trigger from GitHub UI
     inputs:
       create_release:
@@ -33,7 +33,9 @@ jobs:
   build:
     name: Build EXE on Windows
     runs-on: windows-latest
-    timeout-minutes: 150     # model downloads (~1.25 GB) + PyInstaller can be slow
+    # 60 minutes is enough now that ML models are no longer downloaded or
+    # bundled during the build — only pip installs and PyInstaller remain.
+    timeout-minutes: 60
 
     steps:
       # ── Checkout ──────────────────────────────────────────────────────
@@ -58,12 +60,10 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller>=6.3.0
 
-      # ── Download ML models for offline bundling ───────────────────────
-      - name: Download ML models for bundling
-        run: python download_models.py
-        timeout-minutes: 40
-
       # ── Build ─────────────────────────────────────────────────────────
+      # ML models are NOT downloaded or bundled here.
+      # Users place a models\ folder next to the EXE after extracting.
+      # See README.md for download links and the required folder layout.
       - name: Build with PyInstaller
         run: pyinstaller handwriting_extractor.spec --noconfirm
         timeout-minutes: 30
@@ -79,54 +79,16 @@ jobs:
             exit 1
           }
 
-      # ── Zip the output folder as two independent standard zip files ───
-      # We produce two plain .zip files (no splitting) so users can extract
-      # each one with Windows Explorer's built-in "Extract All" — no 7-Zip
-      # or any third-party tool required.
-      #
-      #   app.zip    – EXE + all DLLs/Python files (everything except models)
-      #   models.zip – the bundled ML models directory only
-      #
-      # Both archives use the same internal root path (HandwritingExtractor\)
-      # so extracting them to the same parent folder produces one complete
-      # HandwritingExtractor\ directory.  7-Zip is pre-installed on
-      # windows-latest and is used here only to build the archives on CI.
-      #
-      # PyInstaller 6.x places data files under _internal\ inside the output
-      # folder, so bundled models live at:
-      #   HandwritingExtractor\_internal\models\
-      - name: Verify models directory exists in dist
-        run: |
-          $modelsPath = "dist\HandwritingExtractor\_internal\models"
-          if (Test-Path $modelsPath) {
-            Write-Host "✅ Models directory found at $modelsPath"
-            Get-ChildItem $modelsPath | Select-Object Name, LastWriteTime
-          } else {
-            Write-Error "❌ Models directory not found at $modelsPath – check PyInstaller output layout"
-            Get-ChildItem "dist\HandwritingExtractor" -Depth 2 | Select-Object FullName
-            exit 1
-          }
-
-      - name: Zip distribution folder (two independent standard zip files)
+      # ── Zip the output folder ─────────────────────────────────────────
+      - name: Zip distribution folder
         run: |
           Set-Location dist
-
-          # models archive – HandwritingExtractor\_internal\models\...
-          # (PyInstaller 6.x places datas inside _internal\)
           & "C:\Program Files\7-Zip\7z.exe" a -tzip `
-            "HandwritingExtractor-Windows-x64-models.zip" `
-            "HandwritingExtractor\_internal\models"
-
-          # app archive – HandwritingExtractor\*.exe, *.dll, *.pyd, etc.
-          # -xr!models excludes the models sub-folder wherever it appears
-          & "C:\Program Files\7-Zip\7z.exe" a -tzip `
-            "HandwritingExtractor-Windows-x64-app.zip" `
-            "HandwritingExtractor" "-xr!models"
-
+            "HandwritingExtractor-Windows-x64.zip" `
+            "HandwritingExtractor"
           Set-Location ..
-
-          Write-Host "Archive sizes:"
-          Get-ChildItem "dist\HandwritingExtractor-Windows-x64-*.zip" |
+          Write-Host "Archive size:"
+          Get-Item "dist\HandwritingExtractor-Windows-x64.zip" |
             Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
       # ── Upload as workflow artifact ───────────────────────────────────
@@ -134,7 +96,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HandwritingExtractor-Windows-x64
-          path: dist/HandwritingExtractor-Windows-x64-*.zip
+          path: dist/HandwritingExtractor-Windows-x64.zip
           retention-days: 30
           if-no-files-found: error
 
@@ -165,18 +127,47 @@ jobs:
           body: |
             ## Handwriting Text Extractor – Windows Build
 
-            ### How to install (no 7-Zip needed)
-            1. Download **both** files below:
-               - `HandwritingExtractor-Windows-x64-app.zip` – the application (EXE + libraries)
-               - `HandwritingExtractor-Windows-x64-models.zip` – the bundled ML models
-            2. Create a folder anywhere, e.g. `C:\HandwritingExtractor\`
-            3. Right-click `HandwritingExtractor-Windows-x64-app.zip` → **Extract All…** → extract to that folder
-            4. Right-click `HandwritingExtractor-Windows-x64-models.zip` → **Extract All…** → extract to the **same** folder
-               *(Windows will merge the `HandwritingExtractor` sub-folder automatically)*
-            5. Open `HandwritingExtractor\` and run **HandwritingExtractor.exe**
+            ### How to install
 
-            > **No internet connection required.**  ML models are bundled inside
-            > the distribution folder — the app works fully offline.
+            1. Download **`HandwritingExtractor-Windows-x64.zip`** below
+            2. Extract to a folder, e.g. `C:\HandwritingExtractor\`
+            3. Download the ML models (see links) and place them in a `models\` folder **next to** the EXE:
+
+            ```
+            HandwritingExtractor\
+                HandwritingExtractor.exe
+                models\
+                    trocr\
+                        config.json
+                        generation_config.json
+                        preprocessor_config.json
+                        tokenizer_config.json
+                        vocab.json
+                        merges.txt
+                        special_tokens_map.json
+                        pytorch_model.bin          (~1.35 GB)
+                    easyocr\
+                        craft_mlt_25k.pth          (~90 MB)
+                        english_g2.pth             (~160 MB)
+            ```
+
+            4. Run **`HandwritingExtractor.exe`**
+
+            ### Model download links
+
+            **TrOCR** (`microsoft/trocr-large-handwritten`) — place all files in `models\trocr\`:
+            - [config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/config.json)
+            - [generation_config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/generation_config.json)
+            - [preprocessor_config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/preprocessor_config.json)
+            - [tokenizer_config.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/tokenizer_config.json)
+            - [vocab.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/vocab.json)
+            - [merges.txt](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/merges.txt)
+            - [special_tokens_map.json](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/special_tokens_map.json)
+            - [pytorch_model.bin (~1.35 GB)](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/pytorch_model.bin)
+
+            **EasyOCR** — unzip each archive and place the `.pth` file in `models\easyocr\`:
+            - [craft_mlt_25k.zip (~90 MB)](https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip)
+            - [english_g2.zip (~160 MB)](https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/english_g2.zip)
 
             ### What it does
             - Upload a **PDF** or **image** (PNG/JPG/TIFF/BMP/WebP)
@@ -186,7 +177,7 @@ jobs:
             - Displays full results and lets you save them as a `.txt` file
 
             Built from commit: `${{ github.sha }}`
-          files: dist/HandwritingExtractor-Windows-x64-*.zip
+          files: dist/HandwritingExtractor-Windows-x64.zip
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true

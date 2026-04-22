@@ -139,12 +139,45 @@ def _is_connection_error(exc: BaseException) -> bool:
     return False
 
 
-def _bundled_easyocr_model_dir() -> Optional[str]:
-    """Return the bundled EasyOCR model directory when running as a frozen EXE."""
-    if getattr(sys, "frozen", False):
-        bundled = Path(sys._MEIPASS) / "models" / "easyocr"  # type: ignore[attr-defined]
+def _resolve_models_dir() -> Optional[Path]:
+    """Locate the ``models/`` directory at runtime (frozen EXE only).
+
+    Search order (first match wins):
+
+    1. ``models/`` folder **next to the EXE** — sideloaded by the user.
+    2. ``models/`` folder **inside** ``sys._MEIPASS`` — legacy bundled path.
+
+    Returns the :class:`~pathlib.Path` to the found directory, or *None*
+    when running from source or when neither location is present.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+
+    # 1. Sideloaded: a models/ folder the user placed next to the EXE
+    sideloaded = Path(sys.executable).parent / "models"
+    if sideloaded.exists():
+        logging.info("Using sideloaded models from %s", sideloaded)
+        return sideloaded
+
+    # 2. Bundled inside the frozen archive (fallback for builds that still
+    #    include models in _MEIPASS)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass is not None:
+        bundled = Path(meipass) / "models"
         if bundled.exists():
-            return str(bundled)
+            logging.info("Using bundled models from %s", bundled)
+            return bundled
+
+    return None
+
+
+def _bundled_easyocr_model_dir() -> Optional[str]:
+    """Return the EasyOCR model directory when running as a frozen EXE."""
+    models_dir = _resolve_models_dir()
+    if models_dir is not None:
+        easyocr_dir = models_dir / "easyocr"
+        if easyocr_dir.exists():
+            return str(easyocr_dir)
     return None
 
 
@@ -208,13 +241,23 @@ def _load_trocr(status_cb):
         frozen = getattr(sys, "frozen", False)
 
         if frozen:
-            # Running as bundled EXE — models are stored in a flat directory
-            # (config.json, model weights, tokenizer files …) inside the bundle.
-            # Pass the local path directly to from_pretrained(); do NOT rely on
-            # HF_HUB_CACHE which expects the blob-cache layout, not a flat layout.
-            status_cb(f"Loading TrOCR model '{TROCR_MODEL}' from bundle…")
-            bundle_dir = Path(sys._MEIPASS)  # type: ignore[attr-defined]
-            trocr_local = str(bundle_dir / "models" / "trocr")
+            # Running as frozen EXE — locate the models/ directory.
+            # Priority: sideloaded folder next to EXE > bundled inside _MEIPASS.
+            models_dir = _resolve_models_dir()
+            if models_dir is None:
+                raise FileNotFoundError(
+                    "models/ directory not found.\n\n"
+                    "Place the models/ folder next to HandwritingExtractor.exe:\n"
+                    "  HandwritingExtractor.exe\n"
+                    "  models\\\n"
+                    "    trocr\\\n"
+                    "      config.json, pytorch_model.bin, …\n"
+                    "    easyocr\\\n"
+                    "      craft_mlt_25k.pth, english_g2.pth\n\n"
+                    "Download links are in the project README."
+                )
+            status_cb(f"Loading TrOCR model '{TROCR_MODEL}' from {models_dir}…")
+            trocr_local = str(models_dir / "trocr")
             _trocr_dir_exists = Path(trocr_local).exists()
             logging.info("Frozen EXE: loading TrOCR from %s", trocr_local)
             logging.info("trocr dir exists: %s", _trocr_dir_exists)
