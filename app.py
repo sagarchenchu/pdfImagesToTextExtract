@@ -9,6 +9,7 @@ GUI built with tkinter (ships with Python – no extra install needed).
 Packaged to a Windows .exe with PyInstaller via the included spec file.
 """
 
+import concurrent.futures
 import errno as _errno
 import io
 import logging
@@ -364,8 +365,17 @@ def _trocr_read(image_crop: Image.Image) -> str:
 
 # Number of crops processed in one model.generate() call.
 # Higher values = less per-call overhead → faster throughput on CPU.
+# The ViT encoder runs once for the whole batch, so doubling the batch
+# size roughly halves the number of expensive encoder forward passes.
 # Keep at ≤ 16 to avoid excessive peak memory usage.
-_TROCR_BATCH_SIZE = 8
+_TROCR_BATCH_SIZE = 16
+
+# Maximum number of background threads used for parallel EasyOCR detection.
+# All page-detection futures are submitted upfront so up to _WORKER_THREADS
+# EasyOCR jobs run concurrently while TrOCR processes earlier pages.
+# EasyOCR's PyTorch backend releases the GIL during inference, enabling
+# genuine CPU parallelism across cores.
+_WORKER_THREADS = 10
 
 
 def _trocr_read_batch(image_crops: List[Image.Image]) -> List[str]:
@@ -384,6 +394,22 @@ def _trocr_read_batch(image_crops: List[Image.Image]) -> List[str]:
     return [s.strip() for s in processor.batch_decode(ids, skip_special_tokens=True)]
 
 
+def _detect_regions(image: Image.Image, reader) -> list:
+    """Run EasyOCR text-region detection on *image* and return the raw detections.
+
+    Separated from ``_extract_from_image`` so detection can be executed in a
+    background thread, overlapping with TrOCR inference on the previous page
+    (pipeline parallelism).  Both EasyOCR and TrOCR release the Python GIL
+    during their heavy C++/BLAS operations, enabling genuine parallel CPU
+    execution when run from separate threads.
+
+    Returns the same list that ``reader.readtext(..., detail=1, paragraph=False)``
+    would return.
+    """
+    img_array = np.array(image)
+    return reader.readtext(img_array, detail=1, paragraph=False)
+
+
 def _extract_from_image(
     image: Image.Image,
     label: str,
@@ -393,6 +419,7 @@ def _extract_from_image(
     progress_start: float = 0.0,
     progress_share: float = 100.0,
     reader=None,
+    detections=None,
 ) -> list:
     """
     Detect text regions with EasyOCR, read each with TrOCR.
@@ -403,15 +430,21 @@ def _extract_from_image(
         An initialised ``easyocr.Reader`` instance.  When *None* (default)
         the module-level ``_easyocr_reader`` global is used; callers should
         prefer passing the reader explicitly to avoid relying on global state.
+    detections:
+        Pre-computed EasyOCR detections returned by ``_detect_regions()``.
+        When provided the EasyOCR step is skipped entirely, which enables
+        pipeline parallelism: the caller can run EasyOCR for the *next* page
+        in a background thread while TrOCR processes the *current* page.
+        When *None* (default) EasyOCR is called inline as before.
 
     Returns a list of recognised strings.
     """
     if reader is None:
         reader = _easyocr_reader
-    img_array = np.array(image)
 
-    status_cb(f"[{label}] Detecting text regions with EasyOCR…")
-    detections = reader.readtext(img_array, detail=1, paragraph=False)
+    if detections is None:
+        status_cb(f"[{label}] Detecting text regions with EasyOCR…")
+        detections = _detect_regions(image, reader)
 
     if not detections:
         append_cb(f"\n{'─' * 60}\n{label}\n{'─' * 60}\n[No text detected]\n")
@@ -793,19 +826,30 @@ class HandwritingExtractorApp:
                     if ext == _PDF_EXT:
                         pages = _pdf_to_images(extracted_path)
                         n_pages = len(pages)
-                        for page_i, (page_num, img) in enumerate(pages):
-                            page_share = file_share / n_pages
-                            results = _extract_from_image(
-                                img,
-                                f"{name} – Page {page_num}/{n_pages}",
-                                progress_cb=self._set_progress,
-                                status_cb=self._set_status,
-                                append_cb=self._append_text,
-                                progress_start=progress_start + page_i * page_share,
-                                progress_share=page_share,
-                                reader=ocr_reader,
-                            )
-                            all_results.extend(results)
+                        # Pipeline: submit EasyOCR detection for ALL pages upfront
+                        # so up to _WORKER_THREADS detections run simultaneously.
+                        # _next_det is always a Future inside the loop because
+                        # pages is non-empty (n_pages > 0 was just computed).
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=_WORKER_THREADS) as _pool:
+                            det_futures = [
+                                _pool.submit(_detect_regions, img, ocr_reader)
+                                for _, img in pages
+                            ]
+                            for page_i, (page_num, img) in enumerate(pages):
+                                page_share = file_share / n_pages
+                                detections = det_futures[page_i].result()
+                                results = _extract_from_image(
+                                    img,
+                                    f"{name} – Page {page_num}/{n_pages}",
+                                    progress_cb=self._set_progress,
+                                    status_cb=self._set_status,
+                                    append_cb=self._append_text,
+                                    progress_start=progress_start + page_i * page_share,
+                                    progress_share=page_share,
+                                    reader=ocr_reader,
+                                    detections=detections,
+                                )
+                                all_results.extend(results)
                     else:
                         img = Image.open(extracted_path).convert("RGB")
                         results = _extract_from_image(
@@ -856,19 +900,33 @@ class HandwritingExtractorApp:
                     f"File : {os.path.basename(filepath)}\n"
                     f"Pages: {total}\n"
                 )
-                for i, (page_num, img) in enumerate(pages):
-                    share = 100.0 / total
-                    results = _extract_from_image(
-                        img,
-                        f"Page {page_num}/{total}",
-                        progress_cb=self._set_progress,
-                        status_cb=self._set_status,
-                        append_cb=self._append_text,
-                        progress_start=i * share,
-                        progress_share=share,
-                        reader=ocr_reader,
-                    )
-                    all_results.extend(results)
+                # Pipeline: submit EasyOCR detection for ALL pages upfront so
+                # up to _WORKER_THREADS pages are detected simultaneously.
+                # TrOCR processes each page in order; by the time it reaches
+                # page N the detection result is already (or nearly) ready.
+                # _next_det is always a Future inside the loop because
+                # pages is non-empty (total > 0 was just computed).
+                with concurrent.futures.ThreadPoolExecutor(max_workers=_WORKER_THREADS) as _pool:
+                    det_futures = [
+                        _pool.submit(_detect_regions, img, ocr_reader)
+                        for _, img in pages
+                    ]
+                    for i, (page_num, img) in enumerate(pages):
+                        share = 100.0 / total
+                        # Collect this page's detections (may already be ready).
+                        detections = det_futures[i].result()
+                        results = _extract_from_image(
+                            img,
+                            f"Page {page_num}/{total}",
+                            progress_cb=self._set_progress,
+                            status_cb=self._set_status,
+                            append_cb=self._append_text,
+                            progress_start=i * share,
+                            progress_share=share,
+                            reader=ocr_reader,
+                            detections=detections,
+                        )
+                        all_results.extend(results)
             elif ext == ".zip":
                 all_results = self._run_zip_extraction(filepath, ocr_reader)
             else:
