@@ -29,8 +29,15 @@ Notes
 * The --onedir layout is used here because PyTorch DLLs expand to ~3 GB
   which makes --onefile extremely slow on startup (it must unpack to %TEMP%
   every launch).  Zip the dist\HandwritingExtractor folder for distribution.
+
+* CUDA/GPU DLLs are stripped from the bundle by default (see the
+  _CUDA_DLL_PREFIXES filter below) to keep the distribution ZIP to a
+  manageable size (~500 MB–1 GB instead of ~3 GB).  The app falls back to
+  CPU inference automatically.  To re-enable GPU support, remove or comment
+  out that filter block and rebuild.
 """
 
+import os
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_data_files
@@ -74,10 +81,28 @@ for pkg in [
 #   os.path.join(os.path.dirname(__file__), "models"))
 # at runtime.  PyInstaller normally compiles .py files into the .pyz archive
 # which makes the physical _internal/transformers/models/ directory absent,
-# causing WinError 3 (ERROR_PATH_NOT_FOUND).  Collecting the transformers
-# sources as data files (include_py_files=True) copies them next to the EXE
-# so the directory tree exists on disk.
-datas += collect_data_files("transformers", include_py_files=True)
+# causing WinError 3 (ERROR_PATH_NOT_FOUND).
+#
+# Collecting .py sources for only the model families actually used at runtime
+# (TrOCR, VisionEncoderDecoder, ViT, DeiT, RoBERTa, Auto) provides the
+# required on-disk directory tree without bundling hundreds of unused model
+# .py files that bloat the distribution ZIP.
+# Collecting ALL transformers .py files via
+#   collect_data_files("transformers", include_py_files=True)
+# previously added ~300–500 MB of unused Python source to the archive.
+for _tf_pkg in [
+    "transformers.models.trocr",
+    "transformers.models.vision_encoder_decoder",
+    "transformers.models.vit",
+    "transformers.models.deit",
+    "transformers.models.roberta",
+    "transformers.models.auto",
+]:
+    datas += collect_data_files(_tf_pkg, include_py_files=True)
+
+# Non-.py data files (JSON configs, vocab files, etc.) for the full transformers
+# package — these are small and needed for model configuration at runtime.
+datas += collect_data_files("transformers", include_py_files=False)
 
 # ── ML models are NOT bundled — they are sideloaded at runtime ────────────
 # Place a  models\  folder next to HandwritingExtractor.exe after extracting.
@@ -176,19 +201,63 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=["rthooks/rthook_torchvision.py", "rthooks/rthook_transformers.py"],
     excludes=[
-        # Cut down size by removing things we don't need
+        # Unused UI / data-science packages that sneak in as transitive deps
         "matplotlib",
         "IPython",
         "jupyter",
         "notebook",
         "pandas",
         "scipy.spatial.transform._rotation_groups",
+        # Test / benchmark infrastructure (large, never used at runtime)
+        "torch.testing",
+        "torch.utils.bottleneck",
+        "torch.utils.tensorboard",
+        "torch.distributed",
+        "torch.onnx",
+        "torch.jit",           # TorchScript — not used
+        "torchvision.datasets",
+        "torchvision.io",      # video I/O — not needed
     ],
     noarchive=True,
     optimize=0,
 )
 
 pyz = PYZ(a.pure)
+
+# ── Strip CUDA/GPU-specific DLLs from the bundle ──────────────────────────
+# PyTorch ships a full CUDA toolkit (~1–2 GB of DLLs: cublas, cudnn, cufft,
+# curand, cusolver, cusparse, nvrtc, etc.) even in a plain "pip install torch"
+# on Windows.  These binaries are ONLY needed for NVIDIA GPU inference; they
+# are unused on systems without a CUDA-capable GPU and represent the single
+# largest contributor to distribution ZIP size and extraction time.
+#
+# Filtering them out here produces a CPU-only EXE that is ~1–2 GB lighter.
+# If you need GPU acceleration, remove or comment out this block and rebuild.
+#
+# DLL name prefixes that identify CUDA / GPU-only libraries:
+_CUDA_DLL_PREFIXES = (
+    "cublas",        # cuBLAS: GPU BLAS routines
+    "cublaslt",      # cuBLAS-Lt: lightweight cuBLAS
+    "cudnn",         # cuDNN: deep neural network primitives
+    "cufft",         # cuFFT: GPU fast Fourier transform
+    "curand",        # cuRAND: GPU random number generation
+    "cusolver",      # cuSOLVER: dense/sparse linear algebra
+    "cusparse",      # cuSPARSE: sparse matrix routines
+    "nccl",          # NCCL: multi-GPU / multi-node communication
+    "nvrtc",         # NVRTC: runtime compilation
+    "nvtoolsext",    # NVTX: profiling markers
+    "c10_cuda",      # PyTorch CUDA C10 library
+    "caffe2_nvrtc",  # Caffe2 NVRTC bridge
+    "cudart",        # CUDA runtime (not needed without any CUDA kernels)
+    "torch_cuda",    # PyTorch CUDA extension entry points
+)  # already lowercase — avoids repeated .lower() calls during filtering
+
+def _is_cuda_dll(dest_name: str) -> bool:
+    """Return True if the binary is a CUDA/GPU-only library."""
+    base = os.path.basename(dest_name).lower()
+    return any(base.startswith(p) for p in _CUDA_DLL_PREFIXES)
+
+a.binaries = [(d, s, t) for d, s, t in a.binaries if not _is_cuda_dll(d)]
 
 exe = EXE(
     pyz,

@@ -252,8 +252,8 @@ def _load_trocr(status_cb):
             from transformers import TrOCRProcessor, VisionEncoderDecoderModel
             # Verify the lazy import actually resolved the class (it can silently
             # produce a dummy object when sentencepiece / tokenizers is missing).
-            if not hasattr(TrOCRProcessor, "from_pretrained"):
-                raise AttributeError("TrOCRProcessor.from_pretrained not found")
+            if not (isinstance(TrOCRProcessor, type) and hasattr(TrOCRProcessor, "from_pretrained")):
+                raise AttributeError("TrOCRProcessor is not a valid class")
         except (ImportError, AttributeError) as _lazy_err:
             logging.warning(
                 "transformers lazy import of TrOCRProcessor failed (%s) — "
@@ -464,9 +464,6 @@ def _extract_from_image(
             if text:
                 results.append(text)
                 append_cb(text + "\n")
-            elif not text and easy_text.strip():
-                # Both TrOCR and EasyOCR returned nothing useful; log at debug
-                logging.debug("[%s] region %d: both TrOCR and EasyOCR returned empty", label, abs_idx)
 
     return results
 
