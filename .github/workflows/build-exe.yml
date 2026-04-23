@@ -6,16 +6,20 @@ on:
     branches: ["main", "master"]
     paths:
       - "app.py"
+      - "api_server.py"
       - "requirements.txt"
       - "handwriting_extractor.spec"
+      - "api_server.spec"
       - "rthooks/**"
       - ".github/workflows/build-exe.yml"
   pull_request:
     branches: ["main", "master"]
     paths:
       - "app.py"
+      - "api_server.py"
       - "requirements.txt"
       - "handwriting_extractor.spec"
+      - "api_server.spec"
       - "rthooks/**"
   workflow_dispatch:          # allow manual trigger from GitHub UI
     inputs:
@@ -33,7 +37,7 @@ jobs:
   build:
     name: Build EXE on Windows
     runs-on: windows-latest
-    # 80 minutes: pip install (~40 min) + PyInstaller (~30 min).
+    # 80 minutes: pip install (~40 min) + two PyInstaller builds (~30 min each).
     timeout-minutes: 80
 
     steps:
@@ -59,8 +63,8 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller>=6.3.0
 
-      # ── Build ─────────────────────────────────────────────────────────
-      - name: Build with PyInstaller
+      # ── Build GUI EXE ─────────────────────────────────────────────────
+      - name: Build HandwritingExtractor with PyInstaller
         run: pyinstaller handwriting_extractor.spec --noconfirm
         timeout-minutes: 30
         env:
@@ -74,35 +78,64 @@ jobs:
             ignore::FutureWarning:timm.models.layers,
             ignore::DeprecationWarning:torch.distributed
 
+      # ── Build API server EXE ──────────────────────────────────────────
+      - name: Build TextExtractAPI with PyInstaller
+        run: pyinstaller api_server.spec --noconfirm
+        timeout-minutes: 30
+        env:
+          PYTHONWARNINGS: >-
+            ignore::FutureWarning:timm.models.layers,
+            ignore::DeprecationWarning:torch.distributed
+
       # ── Verify ────────────────────────────────────────────────────────
-      - name: Verify EXE exists
+      - name: Verify EXEs exist
         run: |
           if (Test-Path "dist\HandwritingExtractor\HandwritingExtractor.exe") {
-            Write-Host "✅ EXE built successfully"
+            Write-Host "✅ HandwritingExtractor.exe built successfully"
             Get-Item "dist\HandwritingExtractor\HandwritingExtractor.exe" | Select-Object Name, Length, LastWriteTime
           } else {
-            Write-Error "❌ EXE not found – build failed"
+            Write-Error "❌ HandwritingExtractor.exe not found – build failed"
+            exit 1
+          }
+          if (Test-Path "dist\TextExtractAPI\TextExtractAPI.exe") {
+            Write-Host "✅ TextExtractAPI.exe built successfully"
+            Get-Item "dist\TextExtractAPI\TextExtractAPI.exe" | Select-Object Name, Length, LastWriteTime
+          } else {
+            Write-Error "❌ TextExtractAPI.exe not found – build failed"
             exit 1
           }
 
-      # ── Zip the output folder ─────────────────────────────────────────
-      - name: Zip distribution folder
+      # ── Zip the output folders ────────────────────────────────────────
+      - name: Zip distribution folders
         run: |
           Set-Location dist
           & "C:\Program Files\7-Zip\7z.exe" a -tzip `
             "HandwritingExtractor-Windows-x64.zip" `
             "HandwritingExtractor"
+          & "C:\Program Files\7-Zip\7z.exe" a -tzip `
+            "TextExtractAPI-Windows-x64.zip" `
+            "TextExtractAPI"
           Set-Location ..
-          Write-Host "Archive size:"
+          Write-Host "Archive sizes:"
           Get-Item "dist\HandwritingExtractor-Windows-x64.zip" |
             Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+          Get-Item "dist\TextExtractAPI-Windows-x64.zip" |
+            Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
-      # ── Upload as workflow artifact ───────────────────────────────────
-      - name: Upload EXE artifact
+      # ── Upload as workflow artifacts ──────────────────────────────────
+      - name: Upload HandwritingExtractor artifact
         uses: actions/upload-artifact@v5
         with:
           name: HandwritingExtractor-Windows-x64
           path: dist/HandwritingExtractor-Windows-x64.zip
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload TextExtractAPI artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: TextExtractAPI-Windows-x64
+          path: dist/TextExtractAPI-Windows-x64.zip
           retention-days: 30
           if-no-files-found: error
 
@@ -138,6 +171,22 @@ jobs:
             1. Download **`HandwritingExtractor-Windows-x64.zip`** below and extract to a folder, e.g. `C:\HandwritingExtractor\`
             2. Run **`HandwritingExtractor.exe`**
 
+            ### API Server (headless)
+
+            1. Download **`TextExtractAPI-Windows-x64.zip`** and extract it.
+            2. Run **`TextExtractAPI.exe`** — it starts a local HTTP server on port **9102**.
+            3. Send a PDF or image to the endpoint:
+               ```
+               POST http://127.0.0.1:9102/extractText
+               Content-Type: multipart/form-data
+               Body field: file=<your PDF or image>
+               ```
+               Example with curl:
+               ```
+               curl -X POST http://127.0.0.1:9102/extractText -F "file=@document.pdf"
+               ```
+            4. The response body is the extracted text (UTF-8 plain text).
+
             > **Note:** ML models (TrOCR ~1 GB, EasyOCR ~250 MB) are downloaded automatically on first use and cached in `%USERPROFILE%\.cache\`.
 
             ### What it does
@@ -150,6 +199,7 @@ jobs:
             Built from commit: `${{ github.sha }}`
           files: |
             dist/HandwritingExtractor-Windows-x64.zip
+            dist/TextExtractAPI-Windows-x64.zip
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true
