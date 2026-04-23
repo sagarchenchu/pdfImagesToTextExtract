@@ -24,5 +24,8 @@ Pillow>=10.0.0
 numpy>=1.24.0
 opencv-python-headless>=4.8.0  # EasyOCR uses cv2; headless avoids extra Qt DLLs
 
+# ── API server (TextExtractAPI.exe) ───────────────────────────────────────
+flask>=3.0.0           # HTTP API server for TextExtractAPI.exe (api_server.py)
+
 # ── Packaging helper (not needed at runtime) ───────────────────────────────
 # pyinstaller>=6.3.0   # install separately: pip install pyinstaller
