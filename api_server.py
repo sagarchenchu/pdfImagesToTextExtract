@@ -30,6 +30,9 @@ from typing import List, Optional, Set
 # but keep the guard for defence-in-depth when launched without a console).
 # ---------------------------------------------------------------------------
 if sys.stdout is None or sys.stderr is None:
+    # Intentionally kept open for the lifetime of the process — this file
+    # handle replaces None stdout/stderr so that library code that calls
+    # sys.stdout.write() without a None-guard does not raise AttributeError.
     _devnull = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: WPS515
     if sys.stdout is None:
         sys.stdout = _devnull
@@ -425,6 +428,8 @@ from flask import Flask, request, Response  # noqa: E402
 
 app = Flask(__name__)
 
+_PLAIN_TEXT = "text/plain"
+
 
 @app.route("/extractText", methods=["POST"])
 def extract_text():
@@ -444,29 +449,33 @@ def extract_text():
         500  — extraction failed (details in response body and log file)
     """
     if "file" not in request.files:
-        return Response("No file provided. Send a PDF or image as the 'file' field.\n", status=400, mimetype="text/plain")
+        return Response("No file provided. Send a PDF or image as the 'file' field.\n", status=400, mimetype=_PLAIN_TEXT)
 
     upload = request.files["file"]
     if upload.filename == "":
-        return Response("Empty filename. Please attach a valid PDF or image file.\n", status=400, mimetype="text/plain")
+        return Response("Empty filename. Please attach a valid PDF or image file.\n", status=400, mimetype=_PLAIN_TEXT)
 
     suffix = Path(upload.filename).suffix.lower()
+    # Validate suffix against the allowlist before using it as a tempfile suffix.
+    # This ensures only expected extensions reach the filesystem, preventing
+    # path-injection via a crafted filename.
     allowed = _IMAGE_EXTS | {_PDF_EXT}
     if suffix not in allowed:
         return Response(
             f"Unsupported file type '{suffix}'.\nAccepted: .pdf, {', '.join(sorted(_IMAGE_EXTS))}\n",
             status=400,
-            mimetype="text/plain",
+            mimetype=_PLAIN_TEXT,
         )
 
     # Save the upload to a temp file so the ML pipeline can read it from disk.
+    # Use only the validated suffix (never the full filename) to avoid path injection.
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp_path = tmp.name
             upload.save(tmp_path)
     except OSError as exc:
         logging.error("Failed to save upload to temp file: %s", exc)
-        return Response(f"Server error while saving upload: {exc}\n", status=500, mimetype="text/plain")
+        return Response("Server error while saving upload. See server log for details.\n", status=500, mimetype=_PLAIN_TEXT)
 
     try:
         logging.info("extractText request: file='%s' saved to '%s'", upload.filename, tmp_path)
@@ -475,14 +484,13 @@ def extract_text():
         return Response(text, status=200, mimetype="text/plain; charset=utf-8")
     except ValueError as exc:
         logging.warning("extractText bad request: %s", exc)
-        return Response(str(exc) + "\n", status=400, mimetype="text/plain")
-    except Exception as exc:  # noqa: BLE001
-        tb = traceback.format_exc()
-        logging.error("extractText error:\n%s", tb)
+        return Response(str(exc) + "\n", status=400, mimetype=_PLAIN_TEXT)
+    except Exception:  # noqa: BLE001
+        logging.error("extractText error:\n%s", traceback.format_exc())
         return Response(
-            f"Extraction failed: {exc}\n\nSee log: {_LOG_PATH}\n",
+            f"Extraction failed. See log for details: {_LOG_PATH}\n",
             status=500,
-            mimetype="text/plain",
+            mimetype=_PLAIN_TEXT,
         )
     finally:
         try:
