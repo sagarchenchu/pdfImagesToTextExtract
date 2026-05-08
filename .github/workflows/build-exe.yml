@@ -138,12 +138,13 @@ jobs:
             1. Download **`HandwritingExtractor-Windows-x64.zip`** below and extract to a folder, e.g. `C:\HandwritingExtractor\`
             2. Run **`HandwritingExtractor.exe`**
 
-            > **Note:** ML models (TrOCR ~1 GB, EasyOCR ~250 MB) are downloaded automatically on first use and cached in `%USERPROFILE%\.cache\`.
+            > **Note:** Place the `models\` folder next to `HandwritingExtractor.exe` for offline use. See the README for the required TrOCR and EasyOCR layout.
 
             ### What it does
-            - Upload a **PDF** or **image** (PNG/JPG/TIFF/BMP/WebP)
-            - Detects text regions with **EasyOCR** (layout detection)
-            - Reads each handwritten line with **Microsoft TrOCR** (`trocr-large-handwritten`)
+            - Upload a scanned check as **PDF** or **image** (PNG/JPG/TIFF)
+            - Extracts `Pay to the Order of` and `For/Memo` fields
+            - Reads printed fields with **EasyOCR** printed mode
+            - Reads handwritten fields with **Microsoft TrOCR** (`trocr-base-handwritten`)
             - Shows live progress while extracting
             - Displays full results and lets you save them as a `.txt` file
 

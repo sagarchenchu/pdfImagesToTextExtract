@@ -30,7 +30,7 @@ for _submod in (
     # VisionEncoderDecoder
     "transformers.models.vision_encoder_decoder.modeling_vision_encoder_decoder",
     "transformers.models.vision_encoder_decoder.configuration_vision_encoder_decoder",
-    # Roberta tokenizer (decoder for trocr-large-handwritten)
+    # Roberta tokenizer (decoder for trocr-base-handwritten)
     "transformers.models.roberta.tokenization_roberta",
     "transformers.models.roberta.tokenization_roberta_fast",
     # Shared transformers utilities referenced by the modules above

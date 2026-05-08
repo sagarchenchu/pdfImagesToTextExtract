@@ -777,7 +777,7 @@ class HandwritingExtractorApp:
 
         tk.Label(
             header,
-            text="EasyOCR (layout detection)  +  TrOCR (handwriting recognition)  |  PDF, Image & ZIP support",
+            text="Printed checks: EasyOCR fields  |  Handwritten checks: preprocessed TrOCR fields",
             font=("Segoe UI", 9),
             fg="#90caf9",
             bg="#1a237e",
