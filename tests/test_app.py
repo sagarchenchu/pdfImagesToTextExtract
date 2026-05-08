@@ -481,7 +481,7 @@ class TestCheckFieldHelpers:
         assert kwargs["detail"] == 0
         assert kwargs["paragraph"] is True
 
-    def test_handwritten_check_mode_preprocesses_each_crop_before_trocr(self):
+    def test_handwritten_check_mode_passes_rgb_crops_to_trocr(self):
         image = _solid_image(1000, 500)
 
         with patch("app._trocr_read", side_effect=["Jane Doe", "Rent"]) as mock_trocr:

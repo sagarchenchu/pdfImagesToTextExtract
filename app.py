@@ -499,10 +499,10 @@ def _save_debug_check_images(
 
 
 def _save_debug_check_crops(crops: Dict[str, Image.Image], source_path: str) -> Path:
-    """Compatibility wrapper for legacy callers that only provide field crops."""
+    """Save debug images when only field crops are available."""
     crop_values = list(crops.values())
     if not crop_values:
-        raise ValueError("At least one crop is required to save debug images.")
+        raise ValueError("Cannot save debug images: crops dictionary is empty.")
     # Legacy crop-only callers do not have the original full check available.
     # Use the first crop as a preview so the modern debug filename set is still
     # produced without changing the old helper signature.
