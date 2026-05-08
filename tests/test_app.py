@@ -495,7 +495,7 @@ class TestCheckFieldHelpers:
             assert crop.width > 0
             assert crop.height > 0
 
-    def test_preprocess_handwritten_crop_pads_upscales_and_returns_rgb(self):
+    def test_preprocess_handwritten_crop_transforms_image(self):
         image = _solid_image(100, 40)
 
         result = app._preprocess_handwritten_crop(image)
