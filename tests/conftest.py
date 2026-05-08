@@ -31,6 +31,17 @@ def _make_module(name: str, **attrs) -> types.ModuleType:
 # parameter — they just forward all args to a fresh MagicMock().
 _widget = lambda *a, **kw: MagicMock()  # noqa: E731
 
+
+class _VarStub:
+    def __init__(self, value=None, *a, **kw):  # noqa: ARG002
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self._value = value
+
 _tk_root_mock = MagicMock()
 _tk_stub = _make_module(
     "tkinter",
@@ -38,8 +49,12 @@ _tk_stub = _make_module(
     Frame=_widget,
     Label=_widget,
     Button=_widget,
+    Radiobutton=_widget,
+    Checkbutton=_widget,
     Text=_widget,
     LabelFrame=_widget,
+    StringVar=_VarStub,
+    BooleanVar=_VarStub,
     X="x",
     Y="y",
     BOTH="both",
