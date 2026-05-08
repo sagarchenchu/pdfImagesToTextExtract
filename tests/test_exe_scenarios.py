@@ -119,9 +119,9 @@ class TestAppStartup:
 # SCENARIO 2: Image upload → text extraction pipeline
 # ===========================================================================
 
-class TestImageExtractionPipeline:
+class TestCheckExtractionPipeline:
     """
-    End-to-end tests for _run_extraction with mocked ML models.
+    End-to-end tests for check-mode _run_extraction with mocked ML models.
     The heavy ML loaders (_load_easyocr, _load_trocr) are patched out so
     we can test the routing and UI-update logic without real models.
     """
@@ -141,8 +141,8 @@ class TestImageExtractionPipeline:
 
     # ── PNG image ──────────────────────────────────────────────────────────
 
-    def test_image_extraction_produces_results(self, tmp_path):
-        """_run_extraction on a PNG must call _extract_from_image and finish."""
+    def test_printed_check_extraction_produces_structured_results(self, tmp_path):
+        """_run_extraction on a PNG must append structured check fields."""
         img_path = tmp_path / "test.png"
         _rgb_image().save(img_path)
 
@@ -154,13 +154,13 @@ class TestImageExtractionPipeline:
 
         with (
             patch("app._load_easyocr", return_value=fake_reader),
-            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())),
-            patch("app._trocr_read_batch", return_value=["extracted text"]),
+            patch("app._extract_check_fields", return_value={
+                "pay_to_order_of": "Jane Doe",
+                "memo": "Rent",
+            }),
         ):
             app_instance._run_extraction()
 
-        # The result area must have had text appended (status updated)
-        # We verify by checking _txt_results.insert was called
         assert app_instance._txt_results.insert.called
 
     def test_image_extraction_resets_is_processing(self, tmp_path):
@@ -175,8 +175,10 @@ class TestImageExtractionPipeline:
 
         with (
             patch("app._load_easyocr", return_value=self._fake_reader()),
-            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())),
-            patch("app._trocr_read_batch", return_value=["text"]),
+            patch("app._extract_check_fields", return_value={
+                "pay_to_order_of": "Jane Doe",
+                "memo": "Rent",
+            }),
         ):
             app_instance._run_extraction()
 
@@ -193,8 +195,10 @@ class TestImageExtractionPipeline:
 
         with (
             patch("app._load_easyocr", return_value=self._fake_reader()),
-            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())),
-            patch("app._trocr_read_batch", return_value=["result"]),
+            patch("app._extract_check_fields", return_value={
+                "pay_to_order_of": "Jane Doe",
+                "memo": "Rent",
+            }),
         ):
             app_instance._run_extraction()
 
@@ -202,8 +206,8 @@ class TestImageExtractionPipeline:
 
     # ── PDF file ───────────────────────────────────────────────────────────
 
-    def test_pdf_extraction_calls_pdf_to_images(self, tmp_path):
-        """A .pdf file must go through _pdf_to_images, not direct Image.open."""
+    def test_pdf_check_extraction_uses_first_pdf_page(self, tmp_path):
+        """A .pdf check must load through _pdf_to_images."""
         pdf_path = tmp_path / "doc.pdf"
         pdf_path.write_bytes(b"%PDF-1.4 fake")  # fake file — fitz is mocked
 
@@ -216,16 +220,18 @@ class TestImageExtractionPipeline:
 
         with (
             patch("app._load_easyocr", return_value=fake_reader),
-            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())),
             patch("app._pdf_to_images", return_value=[(1, fake_img)]) as mock_pdf,
-            patch("app._trocr_read_batch", return_value=["pdf text"]),
+            patch("app._extract_check_fields", return_value={
+                "pay_to_order_of": "Jane Doe",
+                "memo": "Rent",
+            }),
         ):
             app_instance._run_extraction()
 
         mock_pdf.assert_called_once_with(str(pdf_path))
 
-    def test_pdf_multipage_processes_all_pages(self, tmp_path):
-        """All pages returned by _pdf_to_images must be processed."""
+    def test_pdf_check_processes_first_page_only(self, tmp_path):
+        """Check extraction processes the first PDF page only."""
         pdf_path = tmp_path / "multi.pdf"
         pdf_path.write_bytes(b"%PDF-1.4 fake")
 
@@ -236,58 +242,47 @@ class TestImageExtractionPipeline:
         app_instance = app.HandwritingExtractorApp(root)
         app_instance._selected_file = str(pdf_path)
 
-        extract_calls = []
-        original_extract = app._extract_from_image
-
-        def spy_extract(image, label, **kw):
-            extract_calls.append(label)
-            return []
-
         with (
             patch("app._load_easyocr", return_value=fake_reader),
-            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())),
             patch("app._pdf_to_images", return_value=pages),
-            patch("app._extract_from_image", side_effect=spy_extract),
+            patch("app._extract_check_fields", return_value={
+                "pay_to_order_of": "Jane Doe",
+                "memo": "Rent",
+            }) as mock_extract,
         ):
             app_instance._run_extraction()
 
-        assert len(extract_calls) == 3
+        assert mock_extract.call_count == 1
+        assert mock_extract.call_args[0][0].size == pages[0][1].size
 
-    # ── ZIP archive ────────────────────────────────────────────────────────
+    # ── Handwritten check mode ─────────────────────────────────────────────
 
-    def test_zip_extraction_processes_supported_files(self, tmp_path):
-        """A ZIP containing images must process each image file."""
-        zip_path = tmp_path / "archive.zip"
-        img = _rgb_image()
-
-        with zipfile.ZipFile(zip_path, "w") as zf:
-            zf.writestr("page1.png", _png_bytes(img))
-            zf.writestr("page2.png", _png_bytes(img))
-            zf.writestr("notes.txt", b"ignore me")
-
-        fake_reader = self._fake_reader()
+    def test_handwritten_mode_loads_trocr_not_easyocr(self, tmp_path):
+        """Handwritten check mode uses TrOCR field OCR and does not load EasyOCR."""
+        img_path = tmp_path / "handwritten.jpg"
+        _rgb_image().save(img_path, format="JPEG")
         root = self._make_root()
         app_instance = app.HandwritingExtractorApp(root)
-        app_instance._selected_file = str(zip_path)
-
-        extract_calls = []
-
-        def spy_extract(image, label, **kw):
-            extract_calls.append(label)
-            return ["some text"]
+        app_instance._selected_file = str(img_path)
+        app_instance._check_mode.set(app._CHECK_MODE_HANDWRITTEN)
 
         with (
-            patch("app._load_easyocr", return_value=fake_reader),
-            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())),
-            patch("app._extract_from_image", side_effect=spy_extract),
+            patch("app._load_easyocr") as mock_easyocr,
+            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())) as mock_trocr,
+            patch("app._extract_check_fields", return_value={
+                "pay_to_order_of": "Jane Doe",
+                "memo": "Rent",
+            }),
         ):
             app_instance._run_extraction()
 
-        # Only the two PNG files should be processed, not the .txt
-        assert len(extract_calls) == 2
+        mock_trocr.assert_called_once()
+        mock_easyocr.assert_not_called()
 
-    def test_zip_no_supported_files_shows_message(self, tmp_path):
-        """A ZIP with no supported files must append a helpful message."""
+    # ── Unsupported archive ────────────────────────────────────────────────
+
+    def test_zip_is_rejected_for_check_extraction(self, tmp_path):
+        """ZIP archives are not a supported check input type."""
         zip_path = tmp_path / "empty.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("README.md", b"nothing to extract")
@@ -299,14 +294,10 @@ class TestImageExtractionPipeline:
         appended: list = []
         app_instance._append_text = MagicMock(side_effect=lambda t: appended.append(t))
 
-        with (
-            patch("app._load_easyocr", return_value=MagicMock()),
-            patch("app._load_trocr", return_value=(MagicMock(), MagicMock())),
-        ):
-            app_instance._run_extraction()
+        app_instance._run_extraction()
 
         joined = " ".join(appended)
-        assert "No supported" in joined or "no supported" in joined.lower()
+        assert "Unsupported check file type" in joined
 
 
 # ===========================================================================

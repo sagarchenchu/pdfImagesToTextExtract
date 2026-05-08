@@ -83,6 +83,16 @@ class TestConstants:
     def test_trocr_model_name(self):
         assert "trocr" in app.TROCR_MODEL.lower()
 
+    def test_supported_check_exts_include_required_formats(self):
+        assert {
+            app._PDF_EXT,
+            ".tif",
+            ".tiff",
+            ".png",
+            ".jpg",
+            ".jpeg",
+        }.issubset(app._SUPPORTED_CHECK_EXTS)
+
 
 # ===========================================================================
 # 2. _is_connection_error
@@ -427,7 +437,80 @@ class TestPdfToImages:
 
 
 # ===========================================================================
-# 8. _trocr_read_batch
+# 8. Check field extraction helpers
+# ===========================================================================
+
+class TestCheckFieldHelpers:
+    def test_load_check_image_tiff_converts_to_rgb(self, tmp_path):
+        path = tmp_path / "scan.tif"
+        Image.new("L", (80, 40), color=255).save(path)
+
+        result = app._load_check_image(str(path))
+
+        assert result.mode == "RGB"
+        assert result.size == (80, 40)
+
+    def test_load_check_image_pdf_uses_first_page(self):
+        first = _solid_image(100, 50)
+        second = _solid_image(200, 100)
+
+        with patch("app._pdf_to_images", return_value=[(1, first), (2, second)]):
+            result = app._load_check_image("/fake/check.pdf")
+
+        assert result.size == first.size
+
+    def test_crop_check_fields_returns_required_fields(self):
+        image = _solid_image(1000, 500)
+
+        crops = app._crop_check_fields(image)
+
+        assert set(crops) == {"pay_to_order_of", "memo"}
+        assert crops["pay_to_order_of"].size == (700, 85)
+        assert crops["memo"].size == (420, 80)
+
+    def test_printed_check_crop_uses_easyocr_on_crop(self):
+        image = _solid_image(100, 40)
+        reader = MagicMock()
+        reader.readtext = MagicMock(return_value=["Jane", "Doe"])
+
+        result = app._read_printed_check_crop(image, reader)
+
+        assert result == "Jane Doe"
+        _, kwargs = reader.readtext.call_args
+        assert kwargs["detail"] == 0
+        assert kwargs["paragraph"] is True
+
+    def test_handwritten_check_mode_reads_each_crop_with_trocr(self):
+        image = _solid_image(1000, 500)
+
+        with patch("app._trocr_read", side_effect=["Jane Doe", "Rent"]) as mock_trocr:
+            result = app._extract_check_fields(image, app._CHECK_MODE_HANDWRITTEN)
+
+        assert result == {"pay_to_order_of": "Jane Doe", "memo": "Rent"}
+        assert mock_trocr.call_count == 2
+
+    def test_save_debug_check_crops_writes_png_files(self, tmp_path):
+        source = tmp_path / "check.png"
+        source.write_bytes(b"fake")
+        crops = {
+            "pay_to_order_of": _solid_image(),
+            "memo": _solid_image(),
+        }
+
+        debug_dir = app._save_debug_check_crops(crops, str(source))
+
+        assert (debug_dir / "pay_to_order_of.png").exists()
+        assert (debug_dir / "memo.png").exists()
+
+    def test_format_check_results_includes_required_labels(self):
+        result = app._format_check_results({"pay_to_order_of": "Jane Doe", "memo": "Rent"})
+
+        assert "Pay to the Order of: Jane Doe" in result
+        assert "For/Memo: Rent" in result
+
+
+# ===========================================================================
+# 9. _trocr_read_batch
 # ===========================================================================
 
 class TestTrocrReadBatch:

@@ -9,9 +9,10 @@
 
 | | |
 |---|---|
-| 📄 **PDF & Image support** | Upload a multi-page PDF or any image (PNG, JPG, TIFF, BMP, WebP) |
-| 🔍 **EasyOCR layout detection** | Locates individual text lines/regions on each page |
-| ✍️ **TrOCR handwriting recognition** | Microsoft `trocr-large-handwritten` reads each detected region |
+| 📄 **Check file support** | Upload a scanned check as PDF, TIF/TIFF, PNG, JPG, or JPEG |
+| 🧾 **Structured check fields** | Extracts `Pay to the Order of` and `For/Memo` fields |
+| 🔍 **Printed check OCR** | Uses EasyOCR on cropped check fields |
+| ✍️ **Handwritten check OCR** | Uses Microsoft `trocr-large-handwritten` only on cropped check fields |
 | 📊 **Live progress bar** | Shows per-region progress during extraction |
 | 💾 **Save results** | Export the full extracted text to a `.txt` file |
 | 🖥️ **Windows EXE** | No Python installation needed on the target machine |
@@ -138,19 +139,22 @@ triggers the **Build Windows EXE** GitHub Actions workflow
 ## 🏗️ Architecture
 
 ```
-PDF / Image
+PDF / TIF / PNG / JPG check
     │
     ▼
-PyMuPDF  ──►  page images (2× zoom for quality)
+PyMuPDF / Pillow  ──►  RGB image (PDF first page)
     │
     ▼
-EasyOCR  ──►  bounding boxes for each text region
-    │
-    ▼  (crop each region)
-TrOCR    ──►  handwritten text string
+Normalize / preprocess image
     │
     ▼
-tkinter GUI  ──►  live display + save to .txt
+Percentage crops ──► Pay to the Order of, For/Memo
+    │
+    ├─ Printed Check     ──► EasyOCR on each crop
+    └─ Handwritten Check ──► TrOCR on each crop
+    │
+    ▼
+tkinter GUI  ──►  structured display + save to .txt
 ```
 
 ### Key libraries
@@ -188,4 +192,3 @@ See [`requirements.txt`](requirements.txt) for exact versions.
 ## 📝 License
 
 MIT
-
