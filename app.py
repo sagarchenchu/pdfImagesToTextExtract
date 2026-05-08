@@ -396,9 +396,9 @@ def _load_check_image(filepath: str) -> Image.Image:
 def _normalize_check_image(image: Image.Image) -> Image.Image:
     """Normalize a check image before percentage-based field cropping."""
     gray = ImageOps.grayscale(image)
-    gray = ImageOps.autocontrast(gray)
-    gray = gray.filter(ImageFilter.SHARPEN)
-    return gray.convert("RGB")
+    contrast = ImageOps.autocontrast(gray)
+    sharpened = contrast.filter(ImageFilter.SHARPEN)
+    return sharpened.convert("RGB")
 
 
 def _percent_crop(image: Image.Image, box: Tuple[float, float, float, float]) -> Image.Image:
@@ -411,9 +411,8 @@ def _percent_crop(image: Image.Image, box: Tuple[float, float, float, float]) ->
     y2 = max(0, min(height, int(round(bottom * height))))
     if x2 <= x1 or y2 <= y1:
         raise ValueError(
-            f"Invalid crop box {box!r}: resulting coordinates "
-            f"({x1}, {y1}, {x2}, {y2}) produce zero or negative dimensions "
-            f"for image size {image.size!r}"
+            f"Invalid crop box {box!r}: resulting coordinates ({x1}, {y1}, {x2}, {y2}) "
+            f"produce zero or negative dimensions for image size {image.size!r}"
         )
     return image.crop((x1, y1, x2, y2))
 
@@ -431,6 +430,8 @@ def _read_printed_check_crop(image_crop: Image.Image, reader) -> str:
     results = reader.readtext(np.array(image_crop), detail=0, paragraph=True)
     texts: List[str] = []
     for item in results:
+        # EasyOCR returns strings with detail=0, but tests and some fallback
+        # paths may pass detail=1-style tuples: (bbox, text, confidence).
         if isinstance(item, str):
             texts.append(item)
         elif isinstance(item, (list, tuple)) and len(item) >= 2:
