@@ -84,7 +84,7 @@ def _setup_logging() -> None:
 _setup_logging()
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 
 # ---------------------------------------------------------------------------
 # Tkinter GUI
@@ -111,6 +111,28 @@ _IMAGE_EXTS: frozenset = frozenset(
 )
 _PDF_EXT: str = ".pdf"
 _ZIP_EXT: str = ".zip"
+
+_CHECK_MODE_PRINTED = "printed"
+_CHECK_MODE_HANDWRITTEN = "handwritten"
+_CHECK_MODE_LABELS = {
+    _CHECK_MODE_PRINTED: "Normal Printed Check",
+    _CHECK_MODE_HANDWRITTEN: "Handwritten Check",
+}
+_SUPPORTED_CHECK_EXTS: frozenset = frozenset(
+    {_PDF_EXT, ".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+)
+
+# Percentage-based crop boxes: (left, top, right, bottom).  These are broad
+# enough to cover common personal/business check layouts while avoiding the
+# signature line for the memo field.
+_CHECK_FIELD_BOXES: dict = {
+    "pay_to_order_of": (0.16, 0.30, 0.86, 0.47),
+    "memo": (0.06, 0.72, 0.48, 0.88),
+}
+_CHECK_FIELD_LABELS = {
+    "pay_to_order_of": "Pay to the Order of",
+    "memo": "For/Memo",
+}
 
 
 def _get_device():
@@ -356,6 +378,107 @@ def _pdf_to_images(pdf_path: str) -> list:
     finally:
         doc.close()
     return images
+
+
+def _load_check_image(filepath: str) -> Image.Image:
+    """Load a supported check file as one RGB image; PDFs use the first page."""
+    ext = Path(filepath).suffix.lower()
+    if ext == _PDF_EXT:
+        pages = _pdf_to_images(filepath)
+        if not pages:
+            raise ValueError("PDF contains no pages.")
+        return pages[0][1].convert("RGB")
+
+    with Image.open(filepath) as img:
+        # PIL opens the first frame of TIFF files by default.  Copy before the
+        # context manager closes the source file, and normalize mode to RGB.
+        return img.convert("RGB").copy()
+
+
+def _normalize_check_image(image: Image.Image) -> Image.Image:
+    """Normalize a check image before percentage-based field cropping."""
+    gray = ImageOps.grayscale(image)
+    gray = ImageOps.autocontrast(gray)
+    gray = gray.filter(ImageFilter.SHARPEN)
+    return gray.convert("RGB")
+
+
+def _percent_crop(image: Image.Image, box: tuple) -> Image.Image:
+    """Crop *image* using percentage coordinates clamped to image bounds."""
+    left, top, right, bottom = box
+    width, height = image.size
+    x1 = max(0, min(width, int(round(left * width))))
+    y1 = max(0, min(height, int(round(top * height))))
+    x2 = max(0, min(width, int(round(right * width))))
+    y2 = max(0, min(height, int(round(bottom * height))))
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError(f"Invalid crop box {box!r} for image size {image.size!r}")
+    return image.crop((x1, y1, x2, y2))
+
+
+def _crop_check_fields(image: Image.Image) -> dict:
+    """Return the required check field crops keyed by structured field name."""
+    return {
+        field_name: _percent_crop(image, crop_box)
+        for field_name, crop_box in _CHECK_FIELD_BOXES.items()
+    }
+
+
+def _read_printed_check_crop(image_crop: Image.Image, reader) -> str:
+    """Run printed OCR on one cropped check field."""
+    results = reader.readtext(np.array(image_crop), detail=0, paragraph=True)
+    texts: List[str] = []
+    for item in results:
+        if isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            texts.append(str(item[1]))
+        else:
+            texts.append(str(item))
+    return " ".join(t.strip() for t in texts if t and t.strip()).strip()
+
+
+def _save_debug_check_crops(crops: dict, source_path: str) -> Path:
+    """Save check field crops next to the source file and return the directory."""
+    src = Path(source_path)
+    debug_dir = src.with_name(f"{src.stem}_debug_crops")
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    for field_name, crop in crops.items():
+        crop.save(debug_dir / f"{field_name}.png")
+    return debug_dir
+
+
+def _extract_check_fields(
+    image: Image.Image,
+    mode: str,
+    reader=None,
+    save_debug_crops: bool = False,
+    source_path: Optional[str] = None,
+) -> dict:
+    """Extract structured check fields from percentage-based crops only."""
+    normalized = _normalize_check_image(image)
+    crops = _crop_check_fields(normalized)
+
+    if save_debug_crops and source_path:
+        _save_debug_check_crops(crops, source_path)
+
+    fields = {}
+    for field_name, crop in crops.items():
+        if mode == _CHECK_MODE_HANDWRITTEN:
+            text = _trocr_read(crop)
+        else:
+            text = _read_printed_check_crop(crop, reader)
+        fields[field_name] = text.strip()
+    return fields
+
+
+def _format_check_results(fields: dict) -> str:
+    """Format structured check OCR output for display/save."""
+    return (
+        f"{_CHECK_FIELD_LABELS['pay_to_order_of']}: "
+        f"{fields.get('pay_to_order_of', '')}\n"
+        f"{_CHECK_FIELD_LABELS['memo']}: {fields.get('memo', '')}\n"
+    )
 
 
 def _trocr_read(image_crop: Image.Image) -> str:
