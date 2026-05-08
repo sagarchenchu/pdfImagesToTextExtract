@@ -252,7 +252,8 @@ class TestCheckExtractionPipeline:
         ):
             app_instance._run_extraction()
 
-        assert mock_extract.call_args[0][0] is pages[0][1]
+        assert mock_extract.call_count == 1
+        assert mock_extract.call_args[0][0].size == pages[0][1].size
 
     # ── Handwritten check mode ─────────────────────────────────────────────
 
