@@ -1,8 +1,8 @@
 """
 Handwriting Text Extractor
 ===========================
-Extracts handwritten text from PDF files and images using:
-  - EasyOCR  : layout / line-region detection
+Extracts printed or handwritten fields from scanned checks using:
+  - EasyOCR  : printed check-field recognition
   - TrOCR    : Microsoft's transformer OCR model for handwriting recognition
 
 GUI built with tkinter (ships with Python – no extra install needed).
@@ -102,7 +102,7 @@ _trocr_processor = None
 _trocr_model = None
 _device = None
 
-TROCR_MODEL = "microsoft/trocr-large-handwritten"
+TROCR_MODEL = "microsoft/trocr-base-handwritten"
 
 # Supported file extensions — single source of truth used by both the upload
 # dialog and the ZIP entry filter.
@@ -115,7 +115,7 @@ _ZIP_EXT: str = ".zip"
 _CHECK_MODE_PRINTED = "printed"
 _CHECK_MODE_HANDWRITTEN = "handwritten"
 _CHECK_MODE_LABELS = {
-    _CHECK_MODE_PRINTED: "Normal Printed Check",
+    _CHECK_MODE_PRINTED: "EasyOCR Printed Check",
     _CHECK_MODE_HANDWRITTEN: "Handwritten Check",
 }
 _SUPPORTED_CHECK_EXTS: FrozenSet[str] = frozenset({_PDF_EXT, ".tif", ".tiff", ".png", ".jpg", ".jpeg"})
@@ -130,6 +130,10 @@ _CHECK_FIELD_BOXES: Dict[str, Tuple[float, float, float, float]] = {
 _CHECK_FIELD_LABELS: Dict[str, str] = {
     "pay_to_order_of": "Pay to the Order of",
     "memo": "For/Memo",
+}
+_CHECK_DEBUG_FILENAMES: Dict[str, Tuple[str, str]] = {
+    "pay_to_order_of": ("pay_to_order_of_original_crop.png", "pay_to_order_of_preprocessed.png"),
+    "memo": ("memo_original_crop.png", "memo_preprocessed.png"),
 }
 
 
@@ -339,7 +343,7 @@ def _load_trocr(status_cb):
                 _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL, local_files_only=True)
             except OSError:
                 # Model not cached yet — download it now
-                status_cb(f"Downloading TrOCR model '{TROCR_MODEL}' (~1 GB, one-time download)…")
+                status_cb(f"Downloading TrOCR model '{TROCR_MODEL}' (one-time download)…")
                 try:
                     _trocr_processor = TrOCRProcessor.from_pretrained(TROCR_MODEL)
                     _trocr_model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
@@ -347,7 +351,7 @@ def _load_trocr(status_cb):
                     if _is_connection_error(exc):
                         raise ConnectionError(
                             "Could not download the TrOCR model — check your internet connection and try again.\n"
-                            "The model (~1 GB) needs to be downloaded once before it can be used offline.\n\n"
+                            "The model needs to be downloaded once before it can be used offline.\n\n"
                             f"Details: {exc}"
                         ) from exc
                     raise
@@ -401,6 +405,31 @@ def _normalize_check_image(image: Image.Image) -> Image.Image:
     return sharpened.convert("RGB")
 
 
+def _autocontrast_or_clahe(gray_image: Image.Image) -> Image.Image:
+    """Boost grayscale contrast with CLAHE when OpenCV is available."""
+    try:
+        import cv2
+
+        arr = np.array(gray_image)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        return Image.fromarray(clahe.apply(arr), mode="L")
+    except Exception:
+        logging.debug("CLAHE unavailable; using Pillow autocontrast.", exc_info=True)
+        return ImageOps.autocontrast(gray_image)
+
+
+def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
+    """Prepare a handwritten crop for TrOCR recognition."""
+    crop = image_crop.convert("RGB")
+    pad = max(8, int(round(min(crop.size) * 0.08)))
+    padded = ImageOps.expand(crop, border=pad, fill="white")
+    upscaled = padded.resize((padded.width * 2, padded.height * 2), Image.Resampling.LANCZOS)
+    gray = ImageOps.grayscale(upscaled)
+    contrast = _autocontrast_or_clahe(gray)
+    sharpened = contrast.filter(ImageFilter.SHARPEN)
+    return sharpened.convert("RGB")
+
+
 def _percent_crop(image: Image.Image, box: Tuple[float, float, float, float]) -> Image.Image:
     """Crop *image* using percentage coordinates clamped to image bounds."""
     left, top, right, bottom = box
@@ -441,14 +470,44 @@ def _read_printed_check_crop(image_crop: Image.Image, reader: object) -> str:
     return " ".join(t.strip() for t in texts if t and t.strip()).strip()
 
 
-def _save_debug_check_crops(crops: Dict[str, Image.Image], source_path: str) -> Path:
-    """Save check field crops next to the source file and return the directory."""
+def _preprocess_check_debug_full_image(image: Image.Image) -> Image.Image:
+    """Create a full-check preview of the preprocessing used before OCR."""
+    gray = ImageOps.grayscale(image.convert("RGB"))
+    contrast = _autocontrast_or_clahe(gray)
+    sharpened = contrast.filter(ImageFilter.SHARPEN)
+    return sharpened.convert("RGB")
+
+
+def _save_debug_check_images(
+    original_full_check: Image.Image,
+    preprocessed_full_check: Image.Image,
+    original_crops: Dict[str, Image.Image],
+    preprocessed_crops: Dict[str, Image.Image],
+    source_path: str,
+) -> Path:
+    """Save check debug images next to the source file and return the directory."""
     src = Path(source_path)
     debug_dir = src.with_name(f"{src.stem}_debug_crops")
     debug_dir.mkdir(parents=True, exist_ok=True)
-    for field_name, crop in crops.items():
-        crop.save(debug_dir / f"{field_name}.png")
+    original_full_check.save(debug_dir / "original_full_check.png")
+    preprocessed_full_check.save(debug_dir / "preprocessed_full_check.png")
+    for field_name, original_crop in original_crops.items():
+        original_filename, preprocessed_filename = _CHECK_DEBUG_FILENAMES[field_name]
+        original_crop.save(debug_dir / original_filename)
+        preprocessed_crops[field_name].save(debug_dir / preprocessed_filename)
     return debug_dir
+
+
+def _save_debug_check_crops(crops: Dict[str, Image.Image], source_path: str) -> Path:
+    """Compatibility wrapper for saving crop-only debug images."""
+    preprocessed_full = _preprocess_check_debug_full_image(next(iter(crops.values())).convert("RGB"))
+    return _save_debug_check_images(
+        preprocessed_full,
+        preprocessed_full,
+        crops,
+        crops,
+        source_path,
+    )
 
 
 def _extract_check_fields(
@@ -459,14 +518,30 @@ def _extract_check_fields(
     source_path: Optional[str] = None,
 ) -> Dict[str, str]:
     """Extract structured check fields from percentage-based crops only."""
-    normalized = _normalize_check_image(image)
-    crops = _crop_check_fields(normalized)
+    original = image.convert("RGB")
+    original_crops = _crop_check_fields(original)
+
+    if mode == _CHECK_MODE_HANDWRITTEN:
+        preprocessed_full = _preprocess_check_debug_full_image(original)
+        ocr_crops = {
+            field_name: _preprocess_handwritten_crop(crop)
+            for field_name, crop in original_crops.items()
+        }
+    else:
+        preprocessed_full = _normalize_check_image(original)
+        ocr_crops = _crop_check_fields(preprocessed_full)
 
     if save_debug_crops and source_path:
-        _save_debug_check_crops(crops, source_path)
+        _save_debug_check_images(
+            original,
+            preprocessed_full,
+            original_crops,
+            ocr_crops,
+            source_path,
+        )
 
     fields = {}
-    for field_name, crop in crops.items():
+    for field_name, crop in ocr_crops.items():
         if mode == _CHECK_MODE_HANDWRITTEN:
             text = _trocr_read(crop)
         else:
@@ -516,9 +591,24 @@ def _trocr_read_batch(image_crops: List[Image.Image]) -> List[str]:
     device = _get_device()
     pixel_values = processor(image_crops, return_tensors="pt").pixel_values.to(device)
     with torch.no_grad():
-        ids = model.generate(pixel_values)
+        ids = model.generate(
+            pixel_values,
+            max_new_tokens=64,
+            num_beams=1,
+            do_sample=False,
+        )
     return [s.strip() for s in processor.batch_decode(ids, skip_special_tokens=True)]
 
+
+# ---------------------------------------------------------------------------
+# Legacy full-page OCR helpers
+# ---------------------------------------------------------------------------
+#
+# The active GUI uses structured check extraction above: fixed check-field crops,
+# EasyOCR for printed mode, and TrOCR for handwritten mode.  The helpers below
+# are retained only for compatibility with older tests and archived flows that
+# processed whole pages by detecting regions with EasyOCR and reading each
+# detected region with TrOCR.
 
 def _detect_regions(image: Image.Image, reader) -> list:
     """Run EasyOCR text-region detection on *image* and return the raw detections.
