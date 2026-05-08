@@ -33,7 +33,7 @@ _widget = lambda *a, **kw: MagicMock()  # noqa: E731
 
 
 class _VarStub:
-    def __init__(self, value=None, *a, **kw):  # noqa: ARG002 - tkinter-compatible constructor args
+    def __init__(self, value=None, *a, **kw):  # noqa: ARG002 - unused tkinter-compatible positional/keyword args
         """Match tkinter variable constructors for test compatibility."""
         self._value = value
 

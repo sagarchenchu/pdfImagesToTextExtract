@@ -425,7 +425,7 @@ def _crop_check_fields(image: Image.Image) -> Dict[str, Image.Image]:
     }
 
 
-def _read_printed_check_crop(image_crop: Image.Image, reader) -> str:
+def _read_printed_check_crop(image_crop: Image.Image, reader: object) -> str:
     """Run printed OCR on one cropped check field."""
     results = reader.readtext(np.array(image_crop), detail=0, paragraph=True)
     texts: List[str] = []
@@ -454,7 +454,7 @@ def _save_debug_check_crops(crops: Dict[str, Image.Image], source_path: str) -> 
 def _extract_check_fields(
     image: Image.Image,
     mode: str,
-    reader=None,
+    reader: Optional[object] = None,
     save_debug_crops: bool = False,
     source_path: Optional[str] = None,
 ) -> Dict[str, str]:
