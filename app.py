@@ -660,6 +660,8 @@ class HandwritingExtractorApp:
 
         self._selected_file: Optional[str] = None
         self._is_processing = False
+        self._check_mode = tk.StringVar(value=_CHECK_MODE_PRINTED)
+        self._save_debug_crops = tk.BooleanVar(value=False)
 
         self._build_ui()
 
@@ -733,6 +735,43 @@ class HandwritingExtractorApp:
         )
         self._lbl_file.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
 
+        # ── Check extraction options ──────────────────────────────────────
+        options = tk.LabelFrame(
+            self.root,
+            text="  Check Extraction Options  ",
+            font=("Segoe UI", 10, "bold"),
+            fg="#1a237e",
+            bg="#f5f5f5",
+            padx=10,
+            pady=8,
+            relief=tk.GROOVE,
+        )
+        options.pack(fill=tk.X, padx=14, pady=(10, 4))
+
+        for mode, label in _CHECK_MODE_LABELS.items():
+            tk.Radiobutton(
+                options,
+                text=label,
+                variable=self._check_mode,
+                value=mode,
+                font=("Segoe UI", 9),
+                fg="#263238",
+                bg="#f5f5f5",
+                activebackground="#f5f5f5",
+                anchor="w",
+            ).pack(side=tk.LEFT, padx=(0, 18))
+
+        tk.Checkbutton(
+            options,
+            text="Save debug crops",
+            variable=self._save_debug_crops,
+            font=("Segoe UI", 9),
+            fg="#263238",
+            bg="#f5f5f5",
+            activebackground="#f5f5f5",
+            anchor="w",
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
         # ── Progress area ────────────────────────────────────────────────
         prog_frame = tk.Frame(self.root, bg="#f5f5f5", pady=6)
         prog_frame.pack(fill=tk.X, padx=14)
@@ -799,15 +838,14 @@ class HandwritingExtractorApp:
     # ------------------------------------------------------------------
 
     def _on_upload(self):
-        img_glob = " ".join(f"*{e}" for e in sorted(_IMAGE_EXTS))
+        img_glob = " ".join(f"*{e}" for e in sorted(_SUPPORTED_CHECK_EXTS - {_PDF_EXT}))
         filetypes = [
-            ("Supported files", f"*.pdf {img_glob} *.zip"),
+            ("Supported check files", f"*.pdf {img_glob}"),
             ("PDF files", "*.pdf"),
             ("Image files", img_glob),
-            ("ZIP archives", "*.zip"),
             ("All files", "*.*"),
         ]
-        path = filedialog.askopenfilename(title="Select PDF, Image, or ZIP archive", filetypes=filetypes)
+        path = filedialog.askopenfilename(title="Select scanned check file", filetypes=filetypes)
         if path:
             self._selected_file = path
             name = os.path.basename(path)
@@ -1001,74 +1039,50 @@ class HandwritingExtractorApp:
     def _run_extraction(self):
         try:
             logging.info("Extraction started for: %s", self._selected_file)
-            # Load models and capture the returned objects explicitly so we
-            # never depend on the module-level globals being readable from
-            # another call stack (e.g. after an edge-case exception path).
-            ocr_reader = _load_easyocr(self._set_status)
-            logging.info("EasyOCR loaded OK")
-            _load_trocr(self._set_status)
-            logging.info("TrOCR loaded OK")
-
             filepath = self._selected_file
             ext = Path(filepath).suffix.lower()
-            all_results: List[str] = []
+            mode = self._check_mode.get()
+            if mode not in _CHECK_MODE_LABELS:
+                mode = _CHECK_MODE_PRINTED
 
             self._set_progress(0)
+            if ext not in _SUPPORTED_CHECK_EXTS:
+                raise ValueError(
+                    "Unsupported check file type. Please select a PDF, TIF/TIFF, PNG, JPG, or JPEG file."
+                )
 
-            if ext == ".pdf":
-                self._set_status("Converting PDF pages to images…")
-                pages = _pdf_to_images(filepath)
-                total = len(pages)
-                self._append_text(
-                    f"File : {os.path.basename(filepath)}\n"
-                    f"Pages: {total}\n"
-                )
-                # Pipeline: submit EasyOCR detection for ALL pages upfront so
-                # up to _WORKER_THREADS pages are detected simultaneously.
-                # TrOCR processes each page in order; by the time it reaches
-                # page N the detection result is already (or nearly) ready.
-                # _next_det is always a Future inside the loop because
-                # pages is non-empty (total > 0 was just computed).
-                with concurrent.futures.ThreadPoolExecutor(max_workers=_WORKER_THREADS) as _pool:
-                    det_futures = [
-                        _pool.submit(_detect_regions, img, ocr_reader)
-                        for _, img in pages
-                    ]
-                    for i, (page_num, img) in enumerate(pages):
-                        share = 100.0 / total
-                        # Collect this page's detections (may already be ready).
-                        detections = det_futures[i].result()
-                        results = _extract_from_image(
-                            img,
-                            f"Page {page_num}/{total}",
-                            progress_cb=self._set_progress,
-                            status_cb=self._set_status,
-                            append_cb=self._append_text,
-                            progress_start=i * share,
-                            progress_share=share,
-                            reader=ocr_reader,
-                            detections=detections,
-                        )
-                        all_results.extend(results)
-            elif ext == ".zip":
-                all_results = self._run_zip_extraction(filepath, ocr_reader)
+            ocr_reader = None
+            if mode == _CHECK_MODE_HANDWRITTEN:
+                _load_trocr(self._set_status)
+                logging.info("TrOCR loaded OK")
             else:
-                img = Image.open(filepath).convert("RGB")
-                self._append_text(f"File: {os.path.basename(filepath)}\n")
-                all_results = _extract_from_image(
-                    img,
-                    "Image",
-                    progress_cb=self._set_progress,
-                    status_cb=self._set_status,
-                    append_cb=self._append_text,
-                    progress_start=0.0,
-                    progress_share=100.0,
-                    reader=ocr_reader,
-                )
+                ocr_reader = _load_easyocr(self._set_status)
+                logging.info("EasyOCR loaded OK")
+
+            self._set_progress(15)
+            self._set_status("Loading and preprocessing check image…")
+            img = _load_check_image(filepath)
+
+            self._append_text(
+                f"File: {os.path.basename(filepath)}\n"
+                f"Mode: {_CHECK_MODE_LABELS[mode]}\n\n"
+            )
+
+            self._set_progress(45)
+            self._set_status("Cropping required check fields and running OCR…")
+            fields = _extract_check_fields(
+                img,
+                mode,
+                reader=ocr_reader,
+                save_debug_crops=bool(self._save_debug_crops.get()),
+                source_path=filepath,
+            )
+            self._append_text(_format_check_results(fields))
+            all_results = [text for text in fields.values() if text]
 
             self._set_progress(100)
             self._set_status(
-                f"✅  Extraction complete — {len(all_results)} text line(s) recognised."
+                f"✅  Check extraction complete — {len(all_results)} field(s) recognised."
             )
             self.root.after(0, lambda: self._btn_save.config(state=tk.NORMAL))
             self.root.after(0, lambda: self._btn_clear.config(state=tk.NORMAL))
