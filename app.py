@@ -118,9 +118,7 @@ _CHECK_MODE_LABELS = {
     _CHECK_MODE_PRINTED: "Normal Printed Check",
     _CHECK_MODE_HANDWRITTEN: "Handwritten Check",
 }
-_SUPPORTED_CHECK_EXTS: frozenset[str] = frozenset(
-    {_PDF_EXT, ".tif", ".tiff", ".png", ".jpg", ".jpeg"}
-)
+_SUPPORTED_CHECK_EXTS: frozenset[str] = frozenset({_PDF_EXT, ".tif", ".tiff", ".png", ".jpg", ".jpeg"})
 
 # Percentage-based crop boxes: (left, top, right, bottom).  These are broad
 # enough to cover common personal/business check layouts while avoiding the
@@ -412,7 +410,11 @@ def _percent_crop(image: Image.Image, box: tuple[float, float, float, float]) ->
     x2 = max(0, min(width, int(round(right * width))))
     y2 = max(0, min(height, int(round(bottom * height))))
     if x2 <= x1 or y2 <= y1:
-        raise ValueError(f"Invalid crop box {box!r} for image size {image.size!r}")
+        raise ValueError(
+            f"Invalid crop box {box!r}: resulting coordinates "
+            f"({x1}, {y1}, {x2}, {y2}) produce zero or negative dimensions "
+            f"for image size {image.size!r}"
+        )
     return image.crop((x1, y1, x2, y2))
 
 

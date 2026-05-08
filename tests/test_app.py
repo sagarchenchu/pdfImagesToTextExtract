@@ -84,7 +84,14 @@ class TestConstants:
         assert "trocr" in app.TROCR_MODEL.lower()
 
     def test_supported_check_exts_match_requirement(self):
-        assert app._SUPPORTED_CHECK_EXTS == {".pdf", ".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+        assert app._SUPPORTED_CHECK_EXTS == {
+            app._PDF_EXT,
+            ".tif",
+            ".tiff",
+            ".png",
+            ".jpg",
+            ".jpeg",
+        }
 
 
 # ===========================================================================
