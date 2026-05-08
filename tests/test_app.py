@@ -82,6 +82,7 @@ class TestConstants:
 
     def test_trocr_model_name(self):
         assert "trocr" in app.TROCR_MODEL.lower()
+        assert app.TROCR_MODEL == "microsoft/trocr-base-handwritten"
 
     def test_supported_check_exts_include_required_formats(self):
         assert {
@@ -480,7 +481,7 @@ class TestCheckFieldHelpers:
         assert kwargs["detail"] == 0
         assert kwargs["paragraph"] is True
 
-    def test_handwritten_check_mode_reads_each_crop_with_trocr(self):
+    def test_handwritten_check_mode_passes_rgb_crops_to_trocr(self):
         image = _solid_image(1000, 500)
 
         with patch("app._trocr_read", side_effect=["Jane Doe", "Rent"]) as mock_trocr:
@@ -488,6 +489,20 @@ class TestCheckFieldHelpers:
 
         assert result == {"pay_to_order_of": "Jane Doe", "memo": "Rent"}
         assert mock_trocr.call_count == 2
+        for call_args in mock_trocr.call_args_list:
+            crop = call_args.args[0]
+            assert crop.mode == "RGB"
+            assert crop.width > 0
+            assert crop.height > 0
+
+    def test_preprocess_handwritten_crop_transforms_image(self):
+        image = _solid_image(100, 40)
+
+        result = app._preprocess_handwritten_crop(image)
+
+        assert result.mode == "RGB"
+        assert result.width > image.width * 2
+        assert result.height > image.height * 2
 
     def test_save_debug_check_crops_writes_png_files(self, tmp_path):
         source = tmp_path / "check.png"
@@ -499,8 +514,12 @@ class TestCheckFieldHelpers:
 
         debug_dir = app._save_debug_check_crops(crops, str(source))
 
-        assert (debug_dir / "pay_to_order_of.png").exists()
-        assert (debug_dir / "memo.png").exists()
+        assert (debug_dir / "original_full_check.png").exists()
+        assert (debug_dir / "preprocessed_full_check.png").exists()
+        assert (debug_dir / "pay_to_order_of_original_crop.png").exists()
+        assert (debug_dir / "pay_to_order_of_preprocessed.png").exists()
+        assert (debug_dir / "memo_original_crop.png").exists()
+        assert (debug_dir / "memo_preprocessed.png").exists()
 
     def test_format_check_results_includes_required_labels(self):
         result = app._format_check_results({"pay_to_order_of": "Jane Doe", "memo": "Rent"})
@@ -559,6 +578,13 @@ class TestTrocrReadBatch:
             with patch.dict(sys.modules, {"torch": mock_torch}):
                 result = app._trocr_read_batch(crops)
             assert result == ["hello world"]
+            mock_model.generate.assert_called_once()
+            _, kwargs = mock_model.generate.call_args
+            assert kwargs == {
+                "max_new_tokens": 64,
+                "num_beams": 1,
+                "do_sample": False,
+            }
         finally:
             app._trocr_processor = None
             app._trocr_model = None

@@ -19,7 +19,7 @@ Notes
       HandwritingExtractor\
           HandwritingExtractor.exe
           models\
-              trocr\          <- microsoft/trocr-large-handwritten files
+              trocr\          <- microsoft/trocr-base-handwritten files
               easyocr\        <- craft_mlt_25k.pth + english_g2.pth
 
   See README.md for download links.  At runtime the EXE checks for the

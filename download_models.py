@@ -10,7 +10,7 @@ Run this ONCE before building with PyInstaller:
     python download_models.py
 
 Models are written to:
-    models/trocr/    – microsoft/trocr-large-handwritten weights (flat layout)
+    models/trocr/    – microsoft/trocr-base-handwritten weights (flat layout)
     models/easyocr/  – EasyOCR CRAFT + English recognition weights
 
 These directories are excluded from git (see .gitignore) but included in the
@@ -34,14 +34,14 @@ MODELS_DIR = SCRIPT_DIR / "models"
 TROCR_CACHE_DIR = MODELS_DIR / "trocr"
 EASYOCR_MODEL_DIR = MODELS_DIR / "easyocr"
 
-TROCR_MODEL = "microsoft/trocr-large-handwritten"
+TROCR_MODEL = "microsoft/trocr-base-handwritten"
 
 
 def download_trocr() -> None:
     TROCR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"\n[TrOCR] Downloading '{TROCR_MODEL}' to {TROCR_CACHE_DIR} …")
-    print("        This is ~1.35 GB and may take several minutes on first run.")
+    print("        This may take several minutes on first run.")
 
     # Use snapshot_download with local_dir so every model file is written
     # directly into TROCR_CACHE_DIR (flat layout: config.json, model weights,

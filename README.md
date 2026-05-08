@@ -1,7 +1,7 @@
 # Handwriting Text Extractor
 
-> Extract **handwritten text** from PDF files and images using a modern
-> **EasyOCR + TrOCR** pipeline — packaged as a Windows `.exe`.
+> Extract printed or handwritten fields from scanned checks using cropped
+> check-field OCR — packaged as a Windows `.exe`.
 
 ---
 
@@ -11,9 +11,10 @@
 |---|---|
 | 📄 **Check file support** | Upload a scanned check as PDF, TIF/TIFF, PNG, JPG, or JPEG |
 | 🧾 **Structured check fields** | Extracts `Pay to the Order of` and `For/Memo` fields |
-| 🔍 **Printed check OCR** | Uses EasyOCR on cropped check fields |
-| ✍️ **Handwritten check OCR** | Uses Microsoft `trocr-large-handwritten` only on cropped check fields |
+| 🔍 **Printed Check mode** | Uses EasyOCR on cropped check fields |
+| ✍️ **Handwritten Check mode** | Uses Microsoft `trocr-base-handwritten` on preprocessed handwritten field crops |
 | 📊 **Live progress bar** | Shows per-region progress during extraction |
+| 🧪 **Debug crops** | Optionally saves full-check previews and field crops beside the source file |
 | 💾 **Save results** | Export the full extracted text to a `.txt` file |
 | 🖥️ **Windows EXE** | No Python installation needed on the target machine |
 
@@ -35,20 +36,20 @@
 
 Download these files once and keep them in the folder layout shown below.
 
-#### TrOCR — `microsoft/trocr-large-handwritten` (~1.35 GB total)
+#### TrOCR — `microsoft/trocr-base-handwritten`
 
 Place all files in `models\trocr\`:
 
 | File | Download |
 |------|----------|
-| `config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/config.json) |
-| `generation_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/generation_config.json) |
-| `preprocessor_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/preprocessor_config.json) |
-| `tokenizer_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/tokenizer_config.json) |
-| `vocab.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/vocab.json) |
-| `merges.txt` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/merges.txt) |
-| `special_tokens_map.json` | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/special_tokens_map.json) |
-| `pytorch_model.bin` (~1.35 GB) | [↓ download](https://huggingface.co/microsoft/trocr-large-handwritten/resolve/main/pytorch_model.bin) |
+| `config.json` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/config.json) |
+| `generation_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/generation_config.json) |
+| `preprocessor_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/preprocessor_config.json) |
+| `tokenizer_config.json` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/tokenizer_config.json) |
+| `vocab.json` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/vocab.json) |
+| `merges.txt` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/merges.txt) |
+| `special_tokens_map.json` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/special_tokens_map.json) |
+| `pytorch_model.bin` | [↓ download](https://huggingface.co/microsoft/trocr-base-handwritten/resolve/main/pytorch_model.bin) |
 
 #### EasyOCR (~250 MB total)
 
@@ -136,6 +137,38 @@ triggers the **Build Windows EXE** GitHub Actions workflow
 
 ---
 
+## 🧾 Check extraction flow
+
+1. Load the first page of a PDF or the selected TIF/TIFF, PNG, JPG, or JPEG as
+   an RGB check image.
+2. Crop the structured fields by percentage-based check coordinates:
+   `Pay to the Order of` and `For/Memo`.
+3. Run the selected check mode:
+   * **Printed Check mode**: normalizes the full check, crops the fields, and
+     runs EasyOCR directly on each printed crop.
+   * **Handwritten Check mode**: crops from the original check, adds white
+     padding, upscales each crop 2×, converts to grayscale, applies CLAHE
+     when OpenCV is available (otherwise autocontrast), sharpens, converts
+     back to RGB, and runs TrOCR with short deterministic generation.
+4. Display the two structured fields and allow saving the results to text.
+
+### Debug crop folder
+
+Enable **Save debug crops** to create a folder next to the input file named
+`<input-name>_debug_crops`. It contains:
+
+* `original_full_check.png`
+* `preprocessed_full_check.png`
+* `pay_to_order_of_original_crop.png`
+* `pay_to_order_of_preprocessed.png`
+* `memo_original_crop.png`
+* `memo_preprocessed.png`
+
+Use these images to verify whether field coordinates and preprocessing match
+the scanned check layout.
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -145,13 +178,13 @@ PDF / TIF / PNG / JPG check
 PyMuPDF / Pillow  ──►  RGB image (PDF first page)
     │
     ▼
-Normalize / preprocess image
+Mode-specific preprocessing
     │
     ▼
 Percentage crops ──► Pay to the Order of, For/Memo
     │
-    ├─ Printed Check     ──► EasyOCR on each crop
-    └─ Handwritten Check ──► TrOCR on each crop
+    ├─ Printed Check     ──► EasyOCR on normalized crops
+    └─ Handwritten Check ──► padded/upscaled/contrast-enhanced crops ──► TrOCR
     │
     ▼
 tkinter GUI  ──►  structured display + save to .txt
@@ -161,10 +194,11 @@ tkinter GUI  ──►  structured display + save to .txt
 
 | Library | Role |
 |---------|------|
-| `easyocr` | Text **region / line detection** (CRAFT detector) |
-| `transformers` (TrOCR) | **Handwriting recognition** per region |
+| `easyocr` | Printed check-field recognition |
+| `transformers` (TrOCR) | Handwritten check-field recognition |
 | `PyMuPDF` (`fitz`) | PDF → image conversion |
 | `Pillow` | Image loading & cropping |
+| `opencv-python-headless` | CLAHE preprocessing when available |
 | `torch` | Inference backend for both models |
 | `tkinter` | Cross-platform GUI (ships with Python) |
 | `PyInstaller` | Packaging to a Windows `.exe` |

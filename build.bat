@@ -11,7 +11,7 @@ REM
 REM   dist\HandwritingExtractor\
 REM       HandwritingExtractor.exe
 REM       models\
-REM           trocr\          <- microsoft/trocr-large-handwritten files
+REM           trocr\          <- microsoft/trocr-base-handwritten files
 REM           easyocr\        <- craft_mlt_25k.pth + english_g2.pth
 REM
 REM See README.md for model download links.
