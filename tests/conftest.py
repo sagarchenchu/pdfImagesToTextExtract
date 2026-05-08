@@ -33,6 +33,8 @@ _widget = lambda *a, **kw: MagicMock()  # noqa: E731
 
 
 class _VarStub:
+    # Match tkinter variable constructors, which accept optional master/name
+    # parameters that tests do not need to use.
     def __init__(self, value=None, *a, **kw):  # noqa: ARG002
         self._value = value
 
