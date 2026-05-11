@@ -140,6 +140,11 @@ _LOW_CONFIDENCE_HANDWRITING_MESSAGE = (
     "Low confidence handwriting OCR. Please check debug crop alignment."
 )
 _OCR_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD = 120
+_HANDWRITTEN_MIN_ALPHA_RATIO = 0.55
+_HANDWRITTEN_MAX_PUNCTUATION_RATIO = 0.25
+_HANDWRITTEN_MIN_TOKENS_FOR_SHORT_RATIO = 3
+_HANDWRITTEN_MAX_SHORT_TOKEN_RATIO = 0.75
 
 
 def _get_device():
@@ -428,10 +433,9 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     crop = image_crop.convert("RGB")
     pad = max(8, int(round(min(crop.size) * 0.08)))
     padded = ImageOps.expand(crop, border=pad, fill="white")
-    # Crops under 120 px on their shortest side are usually thin check fields;
-    # 3× keeps strokes legible before TrOCR's fixed-size resize, while 2×
-    # avoids needless enlargement for already-large crops.
-    scale = 3 if min(padded.size) < 120 else 2
+    # Small crops are usually thin check fields; 3× keeps strokes legible before
+    # TrOCR's fixed-size resize, while 2× avoids needless enlargement.
+    scale = 3 if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD else 2
     upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
     contrast = _autocontrast_or_clahe(gray)
@@ -511,15 +515,19 @@ def looks_garbage(text: str) -> bool:
 
     if digit_mixed_words:
         return True
-    if alpha_ratio < 0.55:
+    if alpha_ratio < _HANDWRITTEN_MIN_ALPHA_RATIO:
         return True
-    if punctuation_ratio > 0.25:
+    if punctuation_ratio > _HANDWRITTEN_MAX_PUNCTUATION_RATIO:
         return True
     if alpha_count < 3 and digit_count > alpha_count:
         return True
     if alpha_tokens and all(len(token) <= 1 for token in alpha_tokens):
         return True
-    if len(alpha_tokens) >= 3 and sum(len(token) <= 2 for token in alpha_tokens) / len(alpha_tokens) > 0.75:
+    if (
+        len(alpha_tokens) >= _HANDWRITTEN_MIN_TOKENS_FOR_SHORT_RATIO
+        and sum(len(token) <= 2 for token in alpha_tokens) / len(alpha_tokens)
+        > _HANDWRITTEN_MAX_SHORT_TOKEN_RATIO
+    ):
         return True
 
     return False
