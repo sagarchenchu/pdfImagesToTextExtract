@@ -427,6 +427,7 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     crop = image_crop.convert("RGB")
     pad = max(8, int(round(min(crop.size) * 0.08)))
     padded = ImageOps.expand(crop, border=pad, fill="white")
+    # Small handwriting crops need more pixels before TrOCR's fixed-size resize.
     scale = 3 if min(padded.size) < 120 else 2
     upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
@@ -1237,10 +1238,7 @@ class HandwritingExtractorApp:
                 source_path=filepath,
             )
             self._append_text(_format_check_results(fields))
-            non_empty_fields = sum(
-                1 for field, text in fields.items()
-                if field in _CHECK_FIELD_LABELS and text
-            )
+            non_empty_fields = sum(1 for text in fields.values() if text)
 
             self._set_progress(100)
             self._set_status(
