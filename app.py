@@ -139,6 +139,7 @@ _CHECK_DEBUG_FILENAMES: Dict[str, Tuple[str, str]] = {
 _LOW_CONFIDENCE_HANDWRITING_MESSAGE = (
     "Low confidence handwriting OCR. Please check debug crop alignment."
 )
+_OCR_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
 def _get_device():
@@ -501,7 +502,7 @@ def looks_garbage(text: str) -> bool:
     alpha_ratio = alpha_count / len(chars)
     punctuation_ratio = punctuation_count / len(chars)
 
-    tokens = re.findall(r"[A-Za-z0-9]+", normalized)
+    tokens = _OCR_TOKEN_RE.findall(normalized)
     alpha_tokens = [token for token in tokens if any(ch.isalpha() for ch in token)]
     digit_mixed_words = [
         token for token in alpha_tokens
@@ -514,7 +515,7 @@ def looks_garbage(text: str) -> bool:
         return True
     if punctuation_ratio > 0.25:
         return True
-    if digit_count > alpha_count and alpha_count < 3:
+    if alpha_count < 3 and digit_count > alpha_count:
         return True
     if alpha_tokens and all(len(token) <= 1 for token in alpha_tokens):
         return True
