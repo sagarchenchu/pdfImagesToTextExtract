@@ -14,6 +14,7 @@ import errno as _errno
 import io
 import logging
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -132,9 +133,12 @@ _CHECK_FIELD_LABELS: Dict[str, str] = {
     "memo": "For/Memo",
 }
 _CHECK_DEBUG_FILENAMES: Dict[str, Tuple[str, str]] = {
-    "pay_to_order_of": ("pay_to_order_of_original_crop.png", "pay_to_order_of_preprocessed.png"),
-    "memo": ("memo_original_crop.png", "memo_preprocessed.png"),
+    "pay_to_order_of": ("pay_to_order_of_original.png", "pay_to_order_of_preprocessed.png"),
+    "memo": ("memo_original.png", "memo_preprocessed.png"),
 }
+_LOW_CONFIDENCE_HANDWRITING_MESSAGE = (
+    "Low confidence handwriting OCR. Please check debug crop alignment."
+)
 
 
 def _get_device():
@@ -423,10 +427,12 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     crop = image_crop.convert("RGB")
     pad = max(8, int(round(min(crop.size) * 0.08)))
     padded = ImageOps.expand(crop, border=pad, fill="white")
-    upscaled = padded.resize((padded.width * 2, padded.height * 2), Image.Resampling.LANCZOS)
+    scale = 3 if min(padded.size) < 120 else 2
+    upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
     contrast = _autocontrast_or_clahe(gray)
-    sharpened = contrast.filter(ImageFilter.SHARPEN)
+    denoised = contrast.filter(ImageFilter.MedianFilter(size=3))
+    sharpened = denoised.filter(ImageFilter.SHARPEN)
     return sharpened.convert("RGB")
 
 
@@ -470,6 +476,50 @@ def _read_printed_check_crop(image_crop: Image.Image, reader: object) -> str:
     return " ".join(t.strip() for t in texts if t and t.strip()).strip()
 
 
+def _read_printed_check_page(image: Image.Image, reader: object) -> str:
+    """Run printed OCR on the full check page."""
+    return _read_printed_check_crop(image.convert("RGB"), reader)
+
+
+def looks_garbage(text: str) -> bool:
+    """Return True when OCR output looks too noisy to display as handwriting."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+
+    chars = [ch for ch in normalized if not ch.isspace()]
+    if not chars:
+        return False
+
+    alpha_count = sum(ch.isalpha() for ch in chars)
+    digit_count = sum(ch.isdigit() for ch in chars)
+    punctuation_count = sum(not ch.isalnum() for ch in chars)
+    alpha_ratio = alpha_count / len(chars)
+    punctuation_ratio = punctuation_count / len(chars)
+
+    tokens = re.findall(r"[A-Za-z0-9]+", normalized)
+    alpha_tokens = [token for token in tokens if any(ch.isalpha() for ch in token)]
+    digit_mixed_words = [
+        token for token in alpha_tokens
+        if any(ch.isdigit() for ch in token) and any(ch.isalpha() for ch in token)
+    ]
+
+    if digit_mixed_words:
+        return True
+    if alpha_ratio < 0.55:
+        return True
+    if punctuation_ratio > 0.25:
+        return True
+    if digit_count > alpha_count and alpha_count < 3:
+        return True
+    if alpha_tokens and all(len(token) <= 1 for token in alpha_tokens):
+        return True
+    if len(alpha_tokens) >= 3 and sum(len(token) <= 2 for token in alpha_tokens) / len(alpha_tokens) > 0.75:
+        return True
+
+    return False
+
+
 def _preprocess_check_debug_full_image(image: Image.Image) -> Image.Image:
     """Create a full-check preview of the preprocessing used before OCR."""
     gray = ImageOps.grayscale(image.convert("RGB"))
@@ -487,10 +537,8 @@ def _save_debug_check_images(
 ) -> Path:
     """Save check debug images next to the source file and return the directory."""
     src = Path(source_path)
-    debug_dir = src.with_name(f"{src.stem}_debug_crops")
+    debug_dir = src.parent / "debug_crops"
     debug_dir.mkdir(parents=True, exist_ok=True)
-    original_full_check.save(debug_dir / "original_full_check.png")
-    preprocessed_full_check.save(debug_dir / "preprocessed_full_check.png")
     for field_name, original_crop in original_crops.items():
         original_filename, preprocessed_filename = _CHECK_DEBUG_FILENAMES[field_name]
         original_crop.save(debug_dir / original_filename)
@@ -548,9 +596,15 @@ def _extract_check_fields(
         )
 
     fields = {}
+    if mode == _CHECK_MODE_HANDWRITTEN and reader is not None:
+        fields["printed_text"] = _read_printed_check_page(original, reader)
+
     for field_name, crop in ocr_crops.items():
         if mode == _CHECK_MODE_HANDWRITTEN:
             text = _trocr_read(crop)
+            if looks_garbage(text):
+                logging.info("Low-confidence TrOCR result for %s: %r", field_name, text)
+                text = _LOW_CONFIDENCE_HANDWRITING_MESSAGE
         else:
             text = _read_printed_check_crop(crop, reader)
         fields[field_name] = text.strip()
@@ -559,7 +613,10 @@ def _extract_check_fields(
 
 def _format_check_results(fields: Dict[str, str]) -> str:
     """Format structured check OCR output for display/save."""
+    printed_text = fields.get("printed_text", "").strip()
+    printed_section = f"Printed OCR: {printed_text}\n" if printed_text else ""
     return (
+        printed_section +
         f"{_CHECK_FIELD_LABELS['pay_to_order_of']}: "
         f"{fields.get('pay_to_order_of', '')}\n"
         f"{_CHECK_FIELD_LABELS['memo']}: {fields.get('memo', '')}\n"
@@ -1153,6 +1210,8 @@ class HandwritingExtractorApp:
 
             ocr_reader = None
             if mode == _CHECK_MODE_HANDWRITTEN:
+                ocr_reader = _load_easyocr(self._set_status)
+                logging.info("EasyOCR loaded OK")
                 _load_trocr(self._set_status)
                 logging.info("TrOCR loaded OK")
             else:
@@ -1178,7 +1237,10 @@ class HandwritingExtractorApp:
                 source_path=filepath,
             )
             self._append_text(_format_check_results(fields))
-            non_empty_fields = sum(1 for text in fields.values() if text)
+            non_empty_fields = sum(
+                1 for field, text in fields.items()
+                if field in _CHECK_FIELD_LABELS and text
+            )
 
             self._set_progress(100)
             self._set_status(

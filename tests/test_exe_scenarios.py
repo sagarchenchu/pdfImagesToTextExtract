@@ -257,8 +257,8 @@ class TestCheckExtractionPipeline:
 
     # ── Handwritten check mode ─────────────────────────────────────────────
 
-    def test_handwritten_mode_loads_trocr_not_easyocr(self, tmp_path):
-        """Handwritten check mode uses TrOCR field OCR and does not load EasyOCR."""
+    def test_handwritten_mode_loads_easyocr_and_trocr(self, tmp_path):
+        """Handwritten check mode uses EasyOCR for printed page text and TrOCR fields."""
         img_path = tmp_path / "handwritten.jpg"
         _rgb_image().save(img_path, format="JPEG")
         root = self._make_root()
@@ -277,7 +277,7 @@ class TestCheckExtractionPipeline:
             app_instance._run_extraction()
 
         mock_trocr.assert_called_once()
-        mock_easyocr.assert_not_called()
+        mock_easyocr.assert_called_once()
 
     # ── Unsupported archive ────────────────────────────────────────────────
 
