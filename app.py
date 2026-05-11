@@ -433,13 +433,13 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     crop = image_crop.convert("RGB")
     pad = max(8, int(round(min(crop.size) * 0.08)))
     padded = ImageOps.expand(crop, border=pad, fill="white")
-    # Small crops are usually thin check fields; 3× keeps strokes legible before
-    # TrOCR's fixed-size resize, while 2× avoids needless enlargement.
+    # Small crops are usually thin check fields; 3x keeps strokes legible before
+    # TrOCR's fixed-size resize, while 2x avoids needless enlargement.
     scale = 3 if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD else 2
     upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
     contrast = _autocontrast_or_clahe(gray)
-    # A 3×3 median filter removes light speckle noise without erasing strokes.
+    # A 3x3 median filter removes light speckle noise without erasing strokes.
     denoised = contrast.filter(ImageFilter.MedianFilter(size=3))
     sharpened = denoised.filter(ImageFilter.SHARPEN)
     return sharpened.convert("RGB")
@@ -550,6 +550,7 @@ def _save_debug_check_images(
 ) -> Path:
     """Save check debug images next to the source file and return the directory."""
     src = Path(source_path)
+    # Keep the exact debug_crops/*.png paths users need when checking TrOCR input.
     debug_dir = src.parent / "debug_crops"
     debug_dir.mkdir(parents=True, exist_ok=True)
     for field_name, original_crop in original_crops.items():
