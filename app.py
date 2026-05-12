@@ -21,7 +21,7 @@ import threading
 import traceback
 import zipfile
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple, Union
 
 # In a PyInstaller console=False build sys.stdout and sys.stderr are set to
 # None by the bootloader because no console is attached.  Some third-party
@@ -487,7 +487,59 @@ def _read_printed_check_crop(image_crop: Image.Image, reader: object) -> str:
 
 def _read_printed_check_page(image: Image.Image, reader: object) -> str:
     """Run printed OCR on the full check page."""
-    return _read_printed_check_crop(image.convert("RGB"), reader)
+    return extract_printed_check_full_page(image, reader)
+
+
+def _sort_easyocr_detail_results(results: list) -> list:
+    """Sort EasyOCR detail=1 results top-to-bottom, then left-to-right."""
+    def _top_left(item) -> Tuple[float, float]:
+        if isinstance(item, (list, tuple)) and item:
+            bbox = item[0]
+            try:
+                xs = [float(pt[0]) for pt in bbox]
+                ys = [float(pt[1]) for pt in bbox]
+                return min(ys), min(xs)
+            except Exception:
+                logging.debug("Could not sort EasyOCR bbox %r", bbox, exc_info=True)
+        return 0.0, 0.0
+
+    return sorted(results, key=_top_left)
+
+
+def _extract_easyocr_text(item) -> str:
+    """Extract text from EasyOCR detail=1/detail=0 result shapes."""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, (list, tuple)) and len(item) >= 2:
+        return str(item[1]).strip()
+    return str(item).strip()
+
+
+def _guess_printed_payee(sorted_results: list) -> Optional[str]:
+    """Best-effort payee guess from printed OCR results near the pay-to-order label."""
+    for idx, item in enumerate(sorted_results):
+        text = _extract_easyocr_text(item)
+        normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        if "pay to the order" in normalized and idx + 1 < len(sorted_results):
+            candidate = _extract_easyocr_text(sorted_results[idx + 1])
+            return candidate or None
+    return None
+
+
+def extract_printed_check_full_page(
+    image: Image.Image,
+    reader: object,
+    return_possible_payee: bool = False,
+) -> Union[str, Tuple[str, Optional[str]]]:
+    """Run full-page printed OCR and return text in reading order."""
+    preprocessed = _normalize_check_image(image.convert("RGB"))
+    results = reader.readtext(np.array(preprocessed), detail=1, paragraph=False)
+    sorted_results = _sort_easyocr_detail_results(results)
+    text_items = [_extract_easyocr_text(item) for item in sorted_results]
+    full_text = "\n".join(text for text in text_items if text).strip()
+    if return_possible_payee:
+        return full_text, _guess_printed_payee(sorted_results)
+    return full_text
 
 
 def looks_garbage(text: str) -> bool:
@@ -1242,16 +1294,22 @@ class HandwritingExtractorApp:
             )
 
             self._set_progress(45)
-            self._set_status("Cropping required check fields and running OCR…")
-            fields = _extract_check_fields(
-                img,
-                mode,
-                reader=ocr_reader,
-                save_debug_crops=bool(self._save_debug_crops.get()),
-                source_path=filepath,
-            )
-            self._append_text(_format_check_results(fields))
-            non_empty_fields = sum(1 for text in fields.values() if text)
+            if mode == _CHECK_MODE_PRINTED:
+                self._set_status("Running full-page printed OCR…")
+                full_text = extract_printed_check_full_page(img, ocr_reader)
+                self._append_text(f"Full Extracted Text:\n\n{full_text}\n")
+                non_empty_fields = 1 if full_text else 0
+            else:
+                self._set_status("Cropping required check fields and running OCR…")
+                fields = _extract_check_fields(
+                    img,
+                    mode,
+                    reader=ocr_reader,
+                    save_debug_crops=bool(self._save_debug_crops.get()),
+                    source_path=filepath,
+                )
+                self._append_text(_format_check_results(fields))
+                non_empty_fields = sum(1 for text in fields.values() if text)
 
             self._set_progress(100)
             self._set_status(

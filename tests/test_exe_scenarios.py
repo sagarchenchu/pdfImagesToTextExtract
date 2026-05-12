@@ -141,8 +141,8 @@ class TestCheckExtractionPipeline:
 
     # ── PNG image ──────────────────────────────────────────────────────────
 
-    def test_printed_check_extraction_produces_structured_results(self, tmp_path):
-        """_run_extraction on a PNG must append structured check fields."""
+    def test_printed_check_extraction_produces_full_page_results(self, tmp_path):
+        """_run_extraction on a PNG must append full-page printed OCR results."""
         img_path = tmp_path / "test.png"
         _rgb_image().save(img_path)
 
@@ -154,14 +154,13 @@ class TestCheckExtractionPipeline:
 
         with (
             patch("app._load_easyocr", return_value=fake_reader),
-            patch("app._extract_check_fields", return_value={
-                "pay_to_order_of": "Jane Doe",
-                "memo": "Rent",
-            }),
+            patch("app.extract_printed_check_full_page", return_value="Matrix Trust Company"),
+            patch("app._extract_check_fields") as mock_extract_fields,
         ):
             app_instance._run_extraction()
 
         assert app_instance._txt_results.insert.called
+        mock_extract_fields.assert_not_called()
 
     def test_image_extraction_resets_is_processing(self, tmp_path):
         """_is_processing must be False again after extraction completes."""
@@ -175,10 +174,7 @@ class TestCheckExtractionPipeline:
 
         with (
             patch("app._load_easyocr", return_value=self._fake_reader()),
-            patch("app._extract_check_fields", return_value={
-                "pay_to_order_of": "Jane Doe",
-                "memo": "Rent",
-            }),
+            patch("app.extract_printed_check_full_page", return_value="Matrix Trust Company"),
         ):
             app_instance._run_extraction()
 
@@ -195,10 +191,7 @@ class TestCheckExtractionPipeline:
 
         with (
             patch("app._load_easyocr", return_value=self._fake_reader()),
-            patch("app._extract_check_fields", return_value={
-                "pay_to_order_of": "Jane Doe",
-                "memo": "Rent",
-            }),
+            patch("app.extract_printed_check_full_page", return_value="Matrix Trust Company"),
         ):
             app_instance._run_extraction()
 
@@ -221,17 +214,14 @@ class TestCheckExtractionPipeline:
         with (
             patch("app._load_easyocr", return_value=fake_reader),
             patch("app._pdf_to_images", return_value=[(1, fake_img)]) as mock_pdf,
-            patch("app._extract_check_fields", return_value={
-                "pay_to_order_of": "Jane Doe",
-                "memo": "Rent",
-            }),
+            patch("app.extract_printed_check_full_page", return_value="Matrix Trust Company"),
         ):
             app_instance._run_extraction()
 
         mock_pdf.assert_called_once_with(str(pdf_path))
 
-    def test_pdf_check_processes_first_page_only(self, tmp_path):
-        """Check extraction processes the first PDF page only."""
+    def test_pdf_check_printed_mode_ocr_uses_first_page_only(self, tmp_path):
+        """Printed check OCR processes the first PDF page only."""
         pdf_path = tmp_path / "multi.pdf"
         pdf_path.write_bytes(b"%PDF-1.4 fake")
 
@@ -245,15 +235,14 @@ class TestCheckExtractionPipeline:
         with (
             patch("app._load_easyocr", return_value=fake_reader),
             patch("app._pdf_to_images", return_value=pages),
-            patch("app._extract_check_fields", return_value={
-                "pay_to_order_of": "Jane Doe",
-                "memo": "Rent",
-            }) as mock_extract,
+            patch("app.extract_printed_check_full_page", return_value="Matrix Trust Company") as mock_full_page,
+            patch("app._extract_check_fields") as mock_extract,
         ):
             app_instance._run_extraction()
 
-        assert mock_extract.call_count == 1
-        assert mock_extract.call_args[0][0].size == pages[0][1].size
+        mock_extract.assert_not_called()
+        assert mock_full_page.call_count == 1
+        assert mock_full_page.call_args[0][0].size == pages[0][1].size
 
     # ── Handwritten check mode ─────────────────────────────────────────────
 

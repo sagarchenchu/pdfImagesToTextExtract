@@ -481,18 +481,39 @@ class TestCheckFieldHelpers:
         assert kwargs["detail"] == 0
         assert kwargs["paragraph"] is True
 
-    def test_printed_check_page_uses_easyocr_on_full_page(self):
+    def test_printed_check_full_page_sorts_easyocr_results(self):
         image = _solid_image(300, 120)
         reader = MagicMock()
-        reader.readtext = MagicMock(return_value=["Matrix Trust Company"])
+        reader.readtext = MagicMock(return_value=[
+            ([[100, 50], [150, 50], [150, 70], [100, 70]], "Second row", 0.9),
+            ([[40, 10], [90, 10], [90, 25], [40, 25]], "First row right", 0.9),
+            ([[5, 10], [30, 10], [30, 25], [5, 25]], "First row left", 0.9),
+        ])
 
-        result = app._read_printed_check_page(image, reader)
+        result = app.extract_printed_check_full_page(image, reader)
 
-        assert result == "Matrix Trust Company"
+        assert result == "First row left\nFirst row right\nSecond row"
         args, kwargs = reader.readtext.call_args
         assert args[0].shape[:2] == (120, 300)
-        assert kwargs["detail"] == 0
-        assert kwargs["paragraph"] is True
+        assert kwargs["detail"] == 1
+        assert kwargs["paragraph"] is False
+
+    def test_printed_check_full_page_can_return_possible_payee(self):
+        image = _solid_image(300, 120)
+        reader = MagicMock()
+        reader.readtext = MagicMock(return_value=[
+            ([[5, 10], [80, 10], [80, 25], [5, 25]], "Pay to the Order of", 0.9),
+            ([[100, 10], [180, 10], [180, 25], [100, 25]], "Jane Doe", 0.9),
+        ])
+
+        full_text, possible_payee = app.extract_printed_check_full_page(
+            image,
+            reader,
+            return_possible_payee=True,
+        )
+
+        assert full_text == "Pay to the Order of\nJane Doe"
+        assert possible_payee == "Jane Doe"
 
     def test_handwritten_check_mode_passes_rgb_crops_to_trocr(self):
         image = _solid_image(1000, 500)
