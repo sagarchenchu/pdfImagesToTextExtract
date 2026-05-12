@@ -141,6 +141,8 @@ _LOW_CONFIDENCE_HANDWRITING_MESSAGE = (
 )
 _OCR_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD = 120
+_HANDWRITTEN_SMALL_CROP_SCALE = 3
+_HANDWRITTEN_LARGE_CROP_SCALE = 2
 _HANDWRITTEN_MIN_ALPHA_RATIO = 0.55
 _HANDWRITTEN_MAX_PUNCTUATION_RATIO = 0.25
 _HANDWRITTEN_MIN_TOKENS_FOR_SHORT_RATIO = 3
@@ -436,7 +438,11 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     # Crops below 120 px on the shortest side are usually thin check fields;
     # 3x keeps strokes legible before TrOCR's fixed-size resize, while 2x
     # avoids needless enlargement for already-large crops.
-    scale = 3 if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD else 2
+    scale = (
+        _HANDWRITTEN_SMALL_CROP_SCALE
+        if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD
+        else _HANDWRITTEN_LARGE_CROP_SCALE
+    )
     upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
     contrast = _autocontrast_or_clahe(gray)
@@ -493,7 +499,7 @@ def _read_printed_check_page(image: Image.Image, reader: object) -> str:
 
 def _sort_easyocr_detail_results(results: list) -> list:
     """Sort EasyOCR detail=1 results top-to-bottom, then left-to-right."""
-    def _top_left(item) -> Tuple[float, float]:
+    def _reading_order_position(item) -> Tuple[float, float]:
         if isinstance(item, (list, tuple)) and item:
             bbox = item[0]
             try:
@@ -504,7 +510,7 @@ def _sort_easyocr_detail_results(results: list) -> list:
                 logging.debug("Could not sort EasyOCR bbox %r", bbox, exc_info=True)
         return 0.0, 0.0
 
-    return sorted(results, key=_top_left)
+    return sorted(results, key=_reading_order_position)
 
 
 def _extract_easyocr_text(item) -> str:
