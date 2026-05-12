@@ -147,9 +147,9 @@ triggers the **Build Windows EXE** GitHub Actions workflow
      left-to-right.
    * **Handwritten Check mode**: crops `Pay to the Order of` and `For/Memo`
      from the original check, adds white
-      padding, upscales each crop 2×, converts to grayscale, applies CLAHE
-      when OpenCV is available (otherwise autocontrast), sharpens, converts
-      back to RGB, and runs TrOCR with short deterministic generation.
+     padding, upscales each crop (3× for small crops, otherwise 2×), converts to grayscale, applies CLAHE
+     when OpenCV is available (otherwise autocontrast), sharpens, converts
+     back to RGB, and runs TrOCR with short deterministic generation.
 3. Display extracted output and allow saving the results to text.
 
 ### Debug crop folder
@@ -161,6 +161,8 @@ Enable **Save debug crops** to create a folder next to the input file named
 * `pay_to_order_of_preprocessed.png`
 * `memo_original.png`
 * `memo_preprocessed.png`
+
+The `debug_crops` folder is reused in that directory and these files are overwritten on subsequent runs.
 
 Use these images to verify whether field coordinates and preprocessing match
 the scanned check layout.
