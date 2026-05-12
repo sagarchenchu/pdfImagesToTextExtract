@@ -14,13 +14,14 @@ import errno as _errno
 import io
 import logging
 import os
+import re
 import sys
 import tempfile
 import threading
 import traceback
 import zipfile
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple, Union
 
 # In a PyInstaller console=False build sys.stdout and sys.stderr are set to
 # None by the bootloader because no console is attached.  Some third-party
@@ -115,8 +116,8 @@ _ZIP_EXT: str = ".zip"
 _CHECK_MODE_PRINTED = "printed"
 _CHECK_MODE_HANDWRITTEN = "handwritten"
 _CHECK_MODE_LABELS = {
-    _CHECK_MODE_PRINTED: "EasyOCR Printed Check",
-    _CHECK_MODE_HANDWRITTEN: "Handwritten Check",
+    _CHECK_MODE_PRINTED: "Printed / Company Check - Full Page OCR",
+    _CHECK_MODE_HANDWRITTEN: "Handwritten Personal Check - Payee + Memo OCR",
 }
 _SUPPORTED_CHECK_EXTS: FrozenSet[str] = frozenset({_PDF_EXT, ".tif", ".tiff", ".png", ".jpg", ".jpeg"})
 
@@ -132,9 +133,20 @@ _CHECK_FIELD_LABELS: Dict[str, str] = {
     "memo": "For/Memo",
 }
 _CHECK_DEBUG_FILENAMES: Dict[str, Tuple[str, str]] = {
-    "pay_to_order_of": ("pay_to_order_of_original_crop.png", "pay_to_order_of_preprocessed.png"),
-    "memo": ("memo_original_crop.png", "memo_preprocessed.png"),
+    "pay_to_order_of": ("pay_to_order_of_original.png", "pay_to_order_of_preprocessed.png"),
+    "memo": ("memo_original.png", "memo_preprocessed.png"),
 }
+_LOW_CONFIDENCE_HANDWRITING_MESSAGE = (
+    "Low confidence handwriting OCR. Please check debug crop alignment."
+)
+_OCR_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_HANDWRITTEN_CROP_SMALL_SIDE_MIN_PX = 120
+_HANDWRITTEN_SMALL_CROP_SCALE = 3
+_HANDWRITTEN_LARGE_CROP_SCALE = 2
+_HANDWRITTEN_MIN_ALPHA_RATIO = 0.55
+_HANDWRITTEN_MAX_PUNCTUATION_RATIO = 0.25
+_HANDWRITTEN_MIN_TOKENS_FOR_SHORT_RATIO = 3
+_HANDWRITTEN_MAX_SHORT_TOKEN_RATIO = 0.75
 
 
 def _get_device():
@@ -423,10 +435,22 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     crop = image_crop.convert("RGB")
     pad = max(8, int(round(min(crop.size) * 0.08)))
     padded = ImageOps.expand(crop, border=pad, fill="white")
-    upscaled = padded.resize((padded.width * 2, padded.height * 2), Image.Resampling.LANCZOS)
+    # Crops below 120 px on the shortest side are usually thin check fields;
+    # _HANDWRITTEN_SMALL_CROP_SCALE keeps strokes legible before TrOCR's
+    # fixed-size resize, while _HANDWRITTEN_LARGE_CROP_SCALE avoids needless
+    # enlargement for already-large crops.
+    scale = (
+        _HANDWRITTEN_SMALL_CROP_SCALE
+        if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_MIN_PX
+        else _HANDWRITTEN_LARGE_CROP_SCALE
+    )
+    upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
     contrast = _autocontrast_or_clahe(gray)
-    sharpened = contrast.filter(ImageFilter.SHARPEN)
+    # MedianFilter(size=3) applies a 3x3 filter that removes light speckle noise
+    # without erasing strokes.
+    denoised = contrast.filter(ImageFilter.MedianFilter(size=3))
+    sharpened = denoised.filter(ImageFilter.SHARPEN)
     return sharpened.convert("RGB")
 
 
@@ -470,6 +494,106 @@ def _read_printed_check_crop(image_crop: Image.Image, reader: object) -> str:
     return " ".join(t.strip() for t in texts if t and t.strip()).strip()
 
 
+def _read_printed_check_page(image: Image.Image, reader: object) -> str:
+    """Run printed OCR on the full check page."""
+    return extract_printed_check_full_page(image, reader)
+
+
+def _sort_easyocr_detail_results(results: list) -> list:
+    """Sort EasyOCR detail=1 results top-to-bottom, then left-to-right."""
+    def _reading_order_position(ocr_result: object) -> Tuple[float, float]:
+        if isinstance(ocr_result, (list, tuple)) and ocr_result:
+            bbox = ocr_result[0]
+            try:
+                xs = [float(pt[0]) for pt in bbox]
+                ys = [float(pt[1]) for pt in bbox]
+                return min(ys), min(xs)
+            except Exception:
+                logging.debug("Could not sort EasyOCR bbox %r", bbox, exc_info=True)
+        return 0.0, 0.0
+
+    return sorted(results, key=_reading_order_position)
+
+
+def _extract_easyocr_text(ocr_result) -> str:
+    """Extract text from EasyOCR detail=1/detail=0 result shapes."""
+    if isinstance(ocr_result, str):
+        return ocr_result.strip()
+    if isinstance(ocr_result, (list, tuple)) and len(ocr_result) >= 2:
+        return str(ocr_result[1]).strip()
+    return str(ocr_result).strip()
+
+
+def _guess_printed_payee(sorted_results: list) -> Optional[str]:
+    """Best-effort payee guess from printed OCR results near the pay-to-order label."""
+    for idx, item in enumerate(sorted_results):
+        text = _extract_easyocr_text(item)
+        normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        if "pay to the order" in normalized and idx + 1 < len(sorted_results):
+            candidate = _extract_easyocr_text(sorted_results[idx + 1])
+            return candidate or None
+    return None
+
+
+def extract_printed_check_full_page(
+    image: Image.Image,
+    reader: object,
+    return_possible_payee: bool = False,
+) -> Union[str, Tuple[str, Optional[str]]]:
+    """Run full-page printed OCR and return text in reading order."""
+    preprocessed = _normalize_check_image(image.convert("RGB"))
+    results = reader.readtext(np.array(preprocessed), detail=1, paragraph=False)
+    sorted_results = _sort_easyocr_detail_results(results)
+    text_items = [_extract_easyocr_text(item) for item in sorted_results]
+    full_text = "\n".join(text for text in text_items if text).strip()
+    if return_possible_payee:
+        return full_text, _guess_printed_payee(sorted_results)
+    return full_text
+
+
+def looks_garbage(text: str) -> bool:
+    """Return True when OCR output looks too noisy to display as handwriting."""
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+
+    chars = [ch for ch in normalized if not ch.isspace()]
+    if not chars:
+        return False
+
+    alpha_count = sum(ch.isalpha() for ch in chars)
+    digit_count = sum(ch.isdigit() for ch in chars)
+    punctuation_count = sum(not ch.isalnum() for ch in chars)
+    alpha_ratio = alpha_count / len(chars)
+    punctuation_ratio = punctuation_count / len(chars)
+
+    tokens = _OCR_TOKEN_RE.findall(normalized)
+    alpha_tokens = [token for token in tokens if any(ch.isalpha() for ch in token)]
+    digit_mixed_words = [
+        token for token in alpha_tokens
+        if any(ch.isdigit() for ch in token) and any(ch.isalpha() for ch in token)
+    ]
+
+    if digit_mixed_words:
+        return True
+    if alpha_ratio < _HANDWRITTEN_MIN_ALPHA_RATIO:
+        return True
+    if punctuation_ratio > _HANDWRITTEN_MAX_PUNCTUATION_RATIO:
+        return True
+    if alpha_count < 3 and digit_count > alpha_count:
+        return True
+    if alpha_tokens and all(len(token) <= 1 for token in alpha_tokens):
+        return True
+    if (
+        len(alpha_tokens) >= _HANDWRITTEN_MIN_TOKENS_FOR_SHORT_RATIO
+        and sum(len(token) <= 2 for token in alpha_tokens) / len(alpha_tokens)
+        > _HANDWRITTEN_MAX_SHORT_TOKEN_RATIO
+    ):
+        return True
+
+    return False
+
+
 def _preprocess_check_debug_full_image(image: Image.Image) -> Image.Image:
     """Create a full-check preview of the preprocessing used before OCR."""
     gray = ImageOps.grayscale(image.convert("RGB"))
@@ -487,10 +611,10 @@ def _save_debug_check_images(
 ) -> Path:
     """Save check debug images next to the source file and return the directory."""
     src = Path(source_path)
-    debug_dir = src.with_name(f"{src.stem}_debug_crops")
+    # Save only the exact TrOCR input crops requested for alignment debugging;
+    # full-check debug images are intentionally omitted here.
+    debug_dir = src.parent / "debug_crops"
     debug_dir.mkdir(parents=True, exist_ok=True)
-    original_full_check.save(debug_dir / "original_full_check.png")
-    preprocessed_full_check.save(debug_dir / "preprocessed_full_check.png")
     for field_name, original_crop in original_crops.items():
         original_filename, preprocessed_filename = _CHECK_DEBUG_FILENAMES[field_name]
         original_crop.save(debug_dir / original_filename)
@@ -548,9 +672,16 @@ def _extract_check_fields(
         )
 
     fields = {}
+    if mode == _CHECK_MODE_HANDWRITTEN and reader is not None:
+        # Preserve printed context from handwritten checks without sending it to TrOCR.
+        fields["printed_text"] = _read_printed_check_page(original, reader)
+
     for field_name, crop in ocr_crops.items():
         if mode == _CHECK_MODE_HANDWRITTEN:
             text = _trocr_read(crop)
+            if looks_garbage(text):
+                logging.info("Low-confidence TrOCR result for %s: %r", field_name, text)
+                text = _LOW_CONFIDENCE_HANDWRITING_MESSAGE
         else:
             text = _read_printed_check_crop(crop, reader)
         fields[field_name] = text.strip()
@@ -559,7 +690,10 @@ def _extract_check_fields(
 
 def _format_check_results(fields: Dict[str, str]) -> str:
     """Format structured check OCR output for display/save."""
+    printed_text = fields.get("printed_text", "")
+    printed_section = f"Printed OCR: {printed_text}\n" if printed_text else ""
     return (
+        printed_section +
         f"{_CHECK_FIELD_LABELS['pay_to_order_of']}: "
         f"{fields.get('pay_to_order_of', '')}\n"
         f"{_CHECK_FIELD_LABELS['memo']}: {fields.get('memo', '')}\n"
@@ -784,7 +918,7 @@ class HandwritingExtractorApp:
 
         tk.Label(
             header,
-            text="Printed checks: EasyOCR fields  |  Handwritten checks: preprocessed TrOCR fields",
+            text="Printed checks: full-page EasyOCR | Handwritten checks: Payee + Memo TrOCR crops",
             font=("Segoe UI", 9),
             fg="#90caf9",
             bg="#1a237e",
@@ -1153,6 +1287,8 @@ class HandwritingExtractorApp:
 
             ocr_reader = None
             if mode == _CHECK_MODE_HANDWRITTEN:
+                ocr_reader = _load_easyocr(self._set_status)
+                logging.info("EasyOCR loaded OK")
                 _load_trocr(self._set_status)
                 logging.info("TrOCR loaded OK")
             else:
@@ -1169,16 +1305,22 @@ class HandwritingExtractorApp:
             )
 
             self._set_progress(45)
-            self._set_status("Cropping required check fields and running OCR…")
-            fields = _extract_check_fields(
-                img,
-                mode,
-                reader=ocr_reader,
-                save_debug_crops=bool(self._save_debug_crops.get()),
-                source_path=filepath,
-            )
-            self._append_text(_format_check_results(fields))
-            non_empty_fields = sum(1 for text in fields.values() if text)
+            if mode == _CHECK_MODE_PRINTED:
+                self._set_status("Running full-page printed OCR…")
+                full_text = extract_printed_check_full_page(img, ocr_reader)
+                self._append_text(f"Full Extracted Text:\n\n{full_text}\n")
+                non_empty_fields = 1 if full_text else 0
+            else:
+                self._set_status("Cropping required check fields and running OCR…")
+                fields = _extract_check_fields(
+                    img,
+                    mode,
+                    reader=ocr_reader,
+                    save_debug_crops=bool(self._save_debug_crops.get()),
+                    source_path=filepath,
+                )
+                self._append_text(_format_check_results(fields))
+                non_empty_fields = sum(1 for text in fields.values() if text)
 
             self._set_progress(100)
             self._set_status(

@@ -1,7 +1,7 @@
 # Handwriting Text Extractor
 
-> Extract printed or handwritten fields from scanned checks using cropped
-> check-field OCR — packaged as a Windows `.exe`.
+> Extract printed full-page text or handwritten payee/memo fields from scanned
+> checks — packaged as a Windows `.exe`.
 
 ---
 
@@ -11,10 +11,10 @@
 |---|---|
 | 📄 **Check file support** | Upload a scanned check as PDF, TIF/TIFF, PNG, JPG, or JPEG |
 | 🧾 **Structured check fields** | Extracts `Pay to the Order of` and `For/Memo` fields |
-| 🔍 **Printed Check mode** | Uses EasyOCR on cropped check fields |
-| ✍️ **Handwritten Check mode** | Uses Microsoft `trocr-base-handwritten` on preprocessed handwritten field crops |
+| 🔍 **Printed / Company Check mode** | Uses full-page EasyOCR (no fixed Payee/Memo crops required) |
+| ✍️ **Handwritten Check mode** | Uses Microsoft `trocr-base-handwritten` on preprocessed Payee + Memo crops |
 | 📊 **Live progress bar** | Shows per-region progress during extraction |
-| 🧪 **Debug crops** | Optionally saves full-check previews and field crops beside the source file |
+| 🧪 **Debug crops** | Optionally saves field crop debug images beside the source file |
 | 💾 **Save results** | Export the full extracted text to a `.txt` file |
 | 🖥️ **Windows EXE** | No Python installation needed on the target machine |
 
@@ -141,28 +141,29 @@ triggers the **Build Windows EXE** GitHub Actions workflow
 
 1. Load the first page of a PDF or the selected TIF/TIFF, PNG, JPG, or JPEG as
    an RGB check image.
-2. Crop the structured fields by percentage-based check coordinates:
-   `Pay to the Order of` and `For/Memo`.
-3. Run the selected check mode:
-   * **Printed Check mode**: normalizes the full check, crops the fields, and
-     runs EasyOCR directly on each printed crop.
-   * **Handwritten Check mode**: crops from the original check, adds white
-     padding, upscales each crop 2×, converts to grayscale, applies CLAHE
+2. Run the selected check mode:
+   * **Printed / Company Check mode**: preprocesses the full check image and
+     runs EasyOCR on the full page, then sorts results top-to-bottom and
+     left-to-right. This mode does **not** depend on fixed Payee/Memo crops and
+     does **not** require a `For/Memo` field (company checks may omit it).
+   * **Handwritten Check mode**: crops `Pay to the Order of` and `For/Memo`
+     from the original check, adds white
+     padding, upscales each crop (3× for small crops, otherwise 2×), converts to grayscale, applies CLAHE
      when OpenCV is available (otherwise autocontrast), sharpens, converts
      back to RGB, and runs TrOCR with short deterministic generation.
-4. Display the two structured fields and allow saving the results to text.
+3. Display extracted output and allow saving the results to text.
 
 ### Debug crop folder
 
 Enable **Save debug crops** to create a folder next to the input file named
-`<input-name>_debug_crops`. It contains:
+`debug_crops`. It contains:
 
-* `original_full_check.png`
-* `preprocessed_full_check.png`
-* `pay_to_order_of_original_crop.png`
+* `pay_to_order_of_original.png`
 * `pay_to_order_of_preprocessed.png`
-* `memo_original_crop.png`
+* `memo_original.png`
 * `memo_preprocessed.png`
+
+The `debug_crops` folder is reused in that directory and these files are overwritten on subsequent runs.
 
 Use these images to verify whether field coordinates and preprocessing match
 the scanned check layout.
@@ -181,21 +182,19 @@ PyMuPDF / Pillow  ──►  RGB image (PDF first page)
 Mode-specific preprocessing
     │
     ▼
-Percentage crops ──► Pay to the Order of, For/Memo
-    │
-    ├─ Printed Check     ──► EasyOCR on normalized crops
-    └─ Handwritten Check ──► padded/upscaled/contrast-enhanced crops ──► TrOCR
+    ├─ Printed Check     ──► full-page preprocessing ──► EasyOCR (full page)
+    └─ Handwritten Check ──► percentage crops (Payee/Memo) ──► padded/upscaled/contrast-enhanced crops ──► TrOCR
     │
     ▼
-tkinter GUI  ──►  structured display + save to .txt
+tkinter GUI  ──►  extracted display + save to .txt
 ```
 
 ### Key libraries
 
 | Library | Role |
 |---------|------|
-| `easyocr` | Printed check-field recognition |
-| `transformers` (TrOCR) | Handwritten check-field recognition |
+| `easyocr` | Printed full-page OCR + printed context OCR |
+| `transformers` (TrOCR) | Handwritten payee/memo crop recognition |
 | `PyMuPDF` (`fitz`) | PDF → image conversion |
 | `Pillow` | Image loading & cropping |
 | `opencv-python-headless` | CLAHE preprocessing when available |

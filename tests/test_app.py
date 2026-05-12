@@ -481,19 +481,60 @@ class TestCheckFieldHelpers:
         assert kwargs["detail"] == 0
         assert kwargs["paragraph"] is True
 
+    def test_printed_check_full_page_sorts_easyocr_results(self):
+        image = _solid_image(300, 120)
+        reader = MagicMock()
+        reader.readtext = MagicMock(return_value=[
+            ([[100, 50], [150, 50], [150, 70], [100, 70]], "Second row", 0.9),
+            ([[40, 10], [90, 10], [90, 25], [40, 25]], "First row right", 0.9),
+            ([[5, 10], [30, 10], [30, 25], [5, 25]], "First row left", 0.9),
+        ])
+
+        result = app.extract_printed_check_full_page(image, reader)
+
+        assert result == "First row left\nFirst row right\nSecond row"
+        args, kwargs = reader.readtext.call_args
+        assert args[0].shape[:2] == (120, 300)
+        assert kwargs["detail"] == 1
+        assert kwargs["paragraph"] is False
+
+    def test_printed_check_full_page_can_return_possible_payee(self):
+        image = _solid_image(300, 120)
+        reader = MagicMock()
+        reader.readtext = MagicMock(return_value=[
+            ([[5, 10], [80, 10], [80, 25], [5, 25]], "Pay to the Order of", 0.9),
+            ([[100, 10], [180, 10], [180, 25], [100, 25]], "Jane Doe", 0.9),
+        ])
+
+        full_text, possible_payee = app.extract_printed_check_full_page(
+            image,
+            reader,
+            return_possible_payee=True,
+        )
+
+        assert full_text == "Pay to the Order of\nJane Doe"
+        assert possible_payee == "Jane Doe"
+
     def test_handwritten_check_mode_passes_rgb_crops_to_trocr(self):
         image = _solid_image(1000, 500)
+        reader = MagicMock()
+        reader.readtext = MagicMock(return_value=["Matrix Trust Company"])
 
         with patch("app._trocr_read", side_effect=["Jane Doe", "Rent"]) as mock_trocr:
-            result = app._extract_check_fields(image, app._CHECK_MODE_HANDWRITTEN)
+            result = app._extract_check_fields(image, app._CHECK_MODE_HANDWRITTEN, reader=reader)
 
-        assert result == {"pay_to_order_of": "Jane Doe", "memo": "Rent"}
+        assert result == {
+            "printed_text": "Matrix Trust Company",
+            "pay_to_order_of": "Jane Doe",
+            "memo": "Rent",
+        }
         assert mock_trocr.call_count == 2
         for call_args in mock_trocr.call_args_list:
             crop = call_args.args[0]
             assert crop.mode == "RGB"
             assert crop.width > 0
             assert crop.height > 0
+        assert reader.readtext.call_count == 1
 
     def test_preprocess_handwritten_crop_transforms_image(self):
         image = _solid_image(100, 40)
@@ -514,18 +555,41 @@ class TestCheckFieldHelpers:
 
         debug_dir = app._save_debug_check_crops(crops, str(source))
 
-        assert (debug_dir / "original_full_check.png").exists()
-        assert (debug_dir / "preprocessed_full_check.png").exists()
-        assert (debug_dir / "pay_to_order_of_original_crop.png").exists()
+        assert debug_dir.name == "debug_crops"
+        assert (debug_dir / "pay_to_order_of_original.png").exists()
         assert (debug_dir / "pay_to_order_of_preprocessed.png").exists()
-        assert (debug_dir / "memo_original_crop.png").exists()
+        assert (debug_dir / "memo_original.png").exists()
         assert (debug_dir / "memo_preprocessed.png").exists()
 
     def test_format_check_results_includes_required_labels(self):
-        result = app._format_check_results({"pay_to_order_of": "Jane Doe", "memo": "Rent"})
+        result = app._format_check_results({
+            "printed_text": "Matrix Trust Company",
+            "pay_to_order_of": "Jane Doe",
+            "memo": "Rent",
+        })
 
+        assert "Printed OCR: Matrix Trust Company" in result
         assert "Pay to the Order of: Jane Doe" in result
         assert "For/Memo: Rent" in result
+
+    def test_looks_garbage_flags_digit_mixed_word(self):
+        assert app.looks_garbage("lotil Tut6npAy h") is True
+
+    def test_looks_garbage_allows_normal_handwriting(self):
+        assert app.looks_garbage("Jane Doe") is False
+        assert app.looks_garbage("Rent") is False
+
+    def test_handwritten_garbage_is_replaced_with_low_confidence_message(self):
+        image = _solid_image(1000, 500)
+        reader = MagicMock()
+        reader.readtext = MagicMock(return_value=["Matrix Trust Company"])
+
+        with patch("app._trocr_read", side_effect=["lotil Tut6npAy h", "Rent"]):
+            result = app._extract_check_fields(image, app._CHECK_MODE_HANDWRITTEN, reader=reader)
+
+        assert result["printed_text"] == "Matrix Trust Company"
+        assert result["pay_to_order_of"] == app._LOW_CONFIDENCE_HANDWRITING_MESSAGE
+        assert result["memo"] == "Rent"
 
 
 # ===========================================================================
