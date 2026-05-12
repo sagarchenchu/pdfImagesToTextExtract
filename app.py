@@ -501,9 +501,9 @@ def _read_printed_check_page(image: Image.Image, reader: object) -> str:
 
 def _sort_easyocr_detail_results(results: list) -> list:
     """Sort EasyOCR detail=1 results top-to-bottom, then left-to-right."""
-    def _reading_order_position(item: object) -> Tuple[float, float]:
-        if isinstance(item, (list, tuple)) and item:
-            bbox = item[0]
+    def _reading_order_position(ocr_result: object) -> Tuple[float, float]:
+        if isinstance(ocr_result, (list, tuple)) and ocr_result:
+            bbox = ocr_result[0]
             try:
                 xs = [float(pt[0]) for pt in bbox]
                 ys = [float(pt[1]) for pt in bbox]
@@ -515,13 +515,13 @@ def _sort_easyocr_detail_results(results: list) -> list:
     return sorted(results, key=_reading_order_position)
 
 
-def _extract_easyocr_text(item) -> str:
+def _extract_easyocr_text(ocr_result) -> str:
     """Extract text from EasyOCR detail=1/detail=0 result shapes."""
-    if isinstance(item, str):
-        return item.strip()
-    if isinstance(item, (list, tuple)) and len(item) >= 2:
-        return str(item[1]).strip()
-    return str(item).strip()
+    if isinstance(ocr_result, str):
+        return ocr_result.strip()
+    if isinstance(ocr_result, (list, tuple)) and len(ocr_result) >= 2:
+        return str(ocr_result[1]).strip()
+    return str(ocr_result).strip()
 
 
 def _guess_printed_payee(sorted_results: list) -> Optional[str]:
