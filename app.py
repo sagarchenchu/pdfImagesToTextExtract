@@ -501,7 +501,7 @@ def _read_printed_check_page(image: Image.Image, reader: object) -> str:
 
 def _sort_easyocr_detail_results(results: list) -> list:
     """Sort EasyOCR detail=1 results top-to-bottom, then left-to-right."""
-    def _reading_order_position(item) -> Tuple[float, float]:
+    def _reading_order_position(item: object) -> Tuple[float, float]:
         if isinstance(item, (list, tuple)) and item:
             bbox = item[0]
             try:
@@ -673,6 +673,7 @@ def _extract_check_fields(
 
     fields = {}
     if mode == _CHECK_MODE_HANDWRITTEN and reader is not None:
+        # Preserve printed context from handwritten checks without sending it to TrOCR.
         fields["printed_text"] = _read_printed_check_page(original, reader)
 
     for field_name, crop in ocr_crops.items():
