@@ -116,8 +116,8 @@ _ZIP_EXT: str = ".zip"
 _CHECK_MODE_PRINTED = "printed"
 _CHECK_MODE_HANDWRITTEN = "handwritten"
 _CHECK_MODE_LABELS = {
-    _CHECK_MODE_PRINTED: "EasyOCR Printed Check",
-    _CHECK_MODE_HANDWRITTEN: "Handwritten Check",
+    _CHECK_MODE_PRINTED: "Printed / Company Check - Full Page OCR",
+    _CHECK_MODE_HANDWRITTEN: "Handwritten Personal Check - Payee + Memo OCR",
 }
 _SUPPORTED_CHECK_EXTS: FrozenSet[str] = frozenset({_PDF_EXT, ".tif", ".tiff", ".png", ".jpg", ".jpeg"})
 
@@ -918,7 +918,7 @@ class HandwritingExtractorApp:
 
         tk.Label(
             header,
-            text="Printed checks: EasyOCR fields  |  Handwritten checks: preprocessed TrOCR fields",
+            text="Printed / Company Check - Full Page OCR  |  Handwritten Personal Check - Payee + Memo OCR",
             font=("Segoe UI", 9),
             fg="#90caf9",
             bg="#1a237e",
