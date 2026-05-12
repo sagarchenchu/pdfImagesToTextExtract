@@ -160,6 +160,12 @@ class TestCheckExtractionPipeline:
             app_instance._run_extraction()
 
         assert app_instance._txt_results.insert.called
+        inserted_text = "".join(
+            call_args.args[1]
+            for call_args in app_instance._txt_results.insert.call_args_list
+        )
+        assert "Full Extracted Text:" in inserted_text
+        assert "Matrix Trust Company" in inserted_text
         mock_extract_fields.assert_not_called()
 
     def test_image_extraction_resets_is_processing(self, tmp_path):

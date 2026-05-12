@@ -140,7 +140,7 @@ _LOW_CONFIDENCE_HANDWRITING_MESSAGE = (
     "Low confidence handwriting OCR. Please check debug crop alignment."
 )
 _OCR_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
-_HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD = 120
+_HANDWRITTEN_CROP_SMALL_SIDE_MIN_PX = 120
 _HANDWRITTEN_SMALL_CROP_SCALE = 3
 _HANDWRITTEN_LARGE_CROP_SCALE = 2
 _HANDWRITTEN_MIN_ALPHA_RATIO = 0.55
@@ -440,7 +440,7 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     # avoids needless enlargement for already-large crops.
     scale = (
         _HANDWRITTEN_SMALL_CROP_SCALE
-        if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD
+        if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_MIN_PX
         else _HANDWRITTEN_LARGE_CROP_SCALE
     )
     upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)

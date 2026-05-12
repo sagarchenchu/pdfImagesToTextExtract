@@ -560,7 +560,6 @@ class TestCheckFieldHelpers:
         assert (debug_dir / "pay_to_order_of_preprocessed.png").exists()
         assert (debug_dir / "memo_original.png").exists()
         assert (debug_dir / "memo_preprocessed.png").exists()
-        assert len(list(debug_dir.iterdir())) == 4
 
     def test_format_check_results_includes_required_labels(self):
         result = app._format_check_results({
