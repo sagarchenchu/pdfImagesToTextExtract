@@ -436,8 +436,9 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     pad = max(8, int(round(min(crop.size) * 0.08)))
     padded = ImageOps.expand(crop, border=pad, fill="white")
     # Crops below 120 px on the shortest side are usually thin check fields;
-    # 3x keeps strokes legible before TrOCR's fixed-size resize, while 2x
-    # avoids needless enlargement for already-large crops.
+    # _HANDWRITTEN_SMALL_CROP_SCALE keeps strokes legible before TrOCR's
+    # fixed-size resize, while _HANDWRITTEN_LARGE_CROP_SCALE avoids needless
+    # enlargement for already-large crops.
     scale = (
         _HANDWRITTEN_SMALL_CROP_SCALE
         if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_MIN_PX
@@ -446,7 +447,8 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
     contrast = _autocontrast_or_clahe(gray)
-    # A 3x3 median filter removes light speckle noise without erasing strokes.
+    # MedianFilter(size=3) applies a 3x3 filter that removes light speckle noise
+    # without erasing strokes.
     denoised = contrast.filter(ImageFilter.MedianFilter(size=3))
     sharpened = denoised.filter(ImageFilter.SHARPEN)
     return sharpened.convert("RGB")
