@@ -918,7 +918,7 @@ class HandwritingExtractorApp:
 
         tk.Label(
             header,
-            text="Printed / Company Check - Full Page OCR  |  Handwritten Personal Check - Payee + Memo OCR",
+            text="Printed checks: full-page EasyOCR | Handwritten checks: Payee + Memo TrOCR crops",
             font=("Segoe UI", 9),
             fg="#90caf9",
             bg="#1a237e",
