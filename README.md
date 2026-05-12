@@ -11,7 +11,7 @@
 |---|---|
 | 📄 **Check file support** | Upload a scanned check as PDF, TIF/TIFF, PNG, JPG, or JPEG |
 | 🧾 **Structured check fields** | Extracts `Pay to the Order of` and `For/Memo` fields |
-| 🔍 **Printed Check mode** | Uses EasyOCR on the full check page |
+| 🔍 **Printed / Company Check mode** | Uses full-page EasyOCR (no fixed Payee/Memo crops required) |
 | ✍️ **Handwritten Check mode** | Uses Microsoft `trocr-base-handwritten` on preprocessed Payee + Memo crops |
 | 📊 **Live progress bar** | Shows per-region progress during extraction |
 | 🧪 **Debug crops** | Optionally saves field crop debug images beside the source file |
@@ -142,9 +142,10 @@ triggers the **Build Windows EXE** GitHub Actions workflow
 1. Load the first page of a PDF or the selected TIF/TIFF, PNG, JPG, or JPEG as
    an RGB check image.
 2. Run the selected check mode:
-   * **Printed Check mode**: preprocesses the full check image and runs
-     EasyOCR on the full page, then sorts results top-to-bottom and
-     left-to-right.
+   * **Printed / Company Check mode**: preprocesses the full check image and
+     runs EasyOCR on the full page, then sorts results top-to-bottom and
+     left-to-right. This mode does **not** depend on fixed Payee/Memo crops and
+     does **not** require a `For/Memo` field (company checks may omit it).
    * **Handwritten Check mode**: crops `Pay to the Order of` and `For/Memo`
      from the original check, adds white
      padding, upscales each crop (3× for small crops, otherwise 2×), converts to grayscale, applies CLAHE
