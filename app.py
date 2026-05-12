@@ -433,8 +433,9 @@ def _preprocess_handwritten_crop(image_crop: Image.Image) -> Image.Image:
     crop = image_crop.convert("RGB")
     pad = max(8, int(round(min(crop.size) * 0.08)))
     padded = ImageOps.expand(crop, border=pad, fill="white")
-    # Small crops are usually thin check fields; 3x keeps strokes legible before
-    # TrOCR's fixed-size resize, while 2x avoids needless enlargement.
+    # Crops below 120 px on the shortest side are usually thin check fields;
+    # 3x keeps strokes legible before TrOCR's fixed-size resize, while 2x
+    # avoids needless enlargement for already-large crops.
     scale = 3 if min(padded.size) < _HANDWRITTEN_CROP_SMALL_SIDE_THRESHOLD else 2
     upscaled = padded.resize((padded.width * scale, padded.height * scale), Image.Resampling.LANCZOS)
     gray = ImageOps.grayscale(upscaled)
@@ -602,7 +603,8 @@ def _save_debug_check_images(
 ) -> Path:
     """Save check debug images next to the source file and return the directory."""
     src = Path(source_path)
-    # Keep the exact debug_crops/*.png paths users need when checking TrOCR input.
+    # Save only the exact TrOCR input crops requested for alignment debugging;
+    # full-check debug images are intentionally omitted here.
     debug_dir = src.parent / "debug_crops"
     debug_dir.mkdir(parents=True, exist_ok=True)
     for field_name, original_crop in original_crops.items():
@@ -679,7 +681,7 @@ def _extract_check_fields(
 
 def _format_check_results(fields: Dict[str, str]) -> str:
     """Format structured check OCR output for display/save."""
-    printed_text = fields.get("printed_text", "").strip()
+    printed_text = fields.get("printed_text", "")
     printed_section = f"Printed OCR: {printed_text}\n" if printed_text else ""
     return (
         printed_section +
